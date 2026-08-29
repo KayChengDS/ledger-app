@@ -53,10 +53,18 @@
     border-bottom:1px solid var(--line);
   }
   .topbar-row{ display:flex; align-items:flex-start; justify-content:space-between; }
-  .brand h1{
-    font-family:'DM Serif Display', serif;
-    font-size:26px; margin:0; letter-spacing:0.2px; color:var(--ink);
+  .brand{ position:relative; }
+  .board-switcher{
+    display:flex; align-items:center; gap:5px; background:none; border:none; padding:0; margin:0; cursor:pointer; color:var(--ink);
   }
+  .board-switcher:active{ opacity:0.75; }
+  .board-name{
+    font-family:'DM Serif Display', serif;
+    font-size:26px; letter-spacing:0.2px; line-height:1;
+    max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .board-chevron{ color:var(--ink-soft); transition: transform .2s ease; flex-shrink:0; margin-top:3px; }
+  .board-chevron.open{ transform: rotate(180deg); }
   .brand .month{
     font-size:12px; color:var(--ink-soft); margin-top:2px; letter-spacing:0.06em; text-transform:uppercase;
   }
@@ -69,6 +77,28 @@
   .icon-btn.ghost{ border:none; background:transparent; width:28px; height:28px; }
   .icon-btn.tiny{ width:24px; height:24px; }
   .topbar-actions{ display:flex; gap:8px; }
+
+  /* ---------- Board dropdown ---------- */
+  .board-menu{
+    position:absolute; top:100%; left:0; margin-top:8px;
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:10px;
+    box-shadow:var(--shadow); min-width:230px; padding:8px; display:none; z-index:30;
+  }
+  .board-menu.open{ display:block; }
+  .board-menu-item{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:10px 10px; border-radius:6px; cursor:pointer; font-size:14px;
+  }
+  .board-menu-item.active{ background:#EFEBDD; font-weight:600; }
+  .board-menu-item .dot{ width:7px; height:7px; border-radius:50%; background:var(--teal); opacity:0; flex-shrink:0; }
+  .board-menu-item.active .dot{ opacity:1; }
+  .board-menu-item .bname{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .board-menu-add{
+    width:100%; margin-top:6px; padding:10px; border-radius:6px; border:1px dashed var(--line);
+    background:none; color:var(--teal-deep); font-weight:600; font-size:13px; cursor:pointer;
+  }
+  .board-menu-add:disabled{ opacity:0.4; cursor:not-allowed; }
+  .board-menu-hint{ font-size:11px; color:var(--ink-soft); margin:8px 2px 2px; text-align:center; }
 
   /* ---------- Views ---------- */
   main.view{ padding:16px 18px 100px; flex:1; }
@@ -248,8 +278,17 @@
   <div class="topbar">
     <div class="topbar-row">
       <div class="brand">
-        <h1>Ledger</h1>
+        <button class="board-switcher" id="board-switcher" aria-haspopup="true" aria-expanded="false">
+          <span class="board-name" id="board-name-label">Monthly</span>
+          <svg class="board-chevron" id="board-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
         <div class="month" id="month-label"></div>
+
+        <div class="board-menu" id="board-menu">
+          <div id="board-menu-list"></div>
+          <button class="board-menu-add" id="board-menu-add">+ New budget</button>
+          <p class="board-menu-hint" id="board-menu-hint"></p>
+        </div>
       </div>
       <div class="topbar-actions">
         <button class="icon-btn" id="btn-download" title="Download backup" aria-label="Download backup">
@@ -278,14 +317,25 @@
 (function(){
   "use strict";
 
-  var STORAGE_KEY = "ledger-data-v2";
-  var state = { income: 0, categories: [] };
+  var MAX_BOARDS = 4;
+  var STORAGE_KEY = "ledger-data-v3";
+  var LEGACY_KEY = "ledger-data-v2";
+
+  var appState = { activeBoardId: null, boards: [] };
   var openCategoryIds = {};
   var currentTab = "overview";
+  var boardMenuOpen = false;
 
   var $overview = document.getElementById("view-overview");
   var $edit = document.getElementById("view-edit");
   var $toast = document.getElementById("toast");
+  var $boardSwitcher = document.getElementById("board-switcher");
+  var $boardMenu = document.getElementById("board-menu");
+  var $boardMenuList = document.getElementById("board-menu-list");
+  var $boardMenuAdd = document.getElementById("board-menu-add");
+  var $boardMenuHint = document.getElementById("board-menu-hint");
+  var $boardChevron = document.getElementById("board-chevron");
+  var $boardNameLabel = document.getElementById("board-name-label");
 
   var CHECK_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   var X_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
@@ -313,6 +363,37 @@
     toast._t = setTimeout(function(){ $toast.classList.remove("show"); }, 1600);
   }
 
+  function escapeHtml(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  /* ---------- Board helpers ---------- */
+  function cb(){
+    return appState.boards.find(function(b){ return b.id === appState.activeBoardId; }) || appState.boards[0];
+  }
+  function createBoard(name){
+    return { id: uid(), name: name, income: 0, categories: [] };
+  }
+  function normalizeCategory(c){
+    c.id = c.id || uid();
+    c.budget = Number(c.budget) || 0;
+    c.budgetOverride = !!c.budgetOverride;
+    c.planned = Array.isArray(c.planned) ? c.planned : (Array.isArray(c.items) ? c.items : []);
+    c.planned.forEach(function(i){ i.id = i.id || uid(); i.amount = Number(i.amount)||0; i.paid = !!i.paid; });
+    c.logs = Array.isArray(c.logs) ? c.logs : [];
+    c.logs.forEach(function(i){ i.id = i.id || uid(); i.amount = Number(i.amount)||0; });
+    return c;
+  }
+  function normalizeBoard(b){
+    b.id = b.id || uid();
+    b.name = (b.name && String(b.name).trim()) || "Budget";
+    b.income = Number(b.income) || 0;
+    b.categories = Array.isArray(b.categories) ? b.categories.map(normalizeCategory) : [];
+    return b;
+  }
+
   /* ---------- Derived numbers ---------- */
   function autoBudget(cat){
     return (cat.planned || []).reduce(function(s,i){ return s + (Number(i.amount)||0); }, 0);
@@ -324,12 +405,12 @@
     return (cat.logs || []).reduce(function(s,i){ return s + (Number(i.amount)||0); }, 0);
   }
   function catSpent(cat){ return plannedSpent(cat) + logsSpent(cat); }
-  function totalBudget(){ return state.categories.reduce(function(s,c){ return s + (Number(c.budget)||0); }, 0); }
-  function totalSpent(){ return state.categories.reduce(function(s,c){ return s + catSpent(c); }, 0); }
+  function totalBudget(){ return cb().categories.reduce(function(s,c){ return s + (Number(c.budget)||0); }, 0); }
+  function totalSpent(){ return cb().categories.reduce(function(s,c){ return s + catSpent(c); }, 0); }
 
   async function persist(silent){
     try{
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(appState));
       if(!silent) toast("Saved ✓");
     }catch(err){
       console.error("Save failed", err);
@@ -342,13 +423,25 @@
       var raw = localStorage.getItem(STORAGE_KEY);
       if(raw){
         var parsed = JSON.parse(raw);
-        if(parsed && typeof parsed === "object"){
-          state.income = Number(parsed.income) || 0;
-          state.categories = Array.isArray(parsed.categories) ? parsed.categories.map(normalizeCategory) : [];
+        if(parsed && Array.isArray(parsed.boards) && parsed.boards.length){
+          appState.boards = parsed.boards.map(normalizeBoard);
+          appState.activeBoardId = parsed.activeBoardId && appState.boards.some(function(b){return b.id===parsed.activeBoardId;})
+            ? parsed.activeBoardId : appState.boards[0].id;
+        } else {
+          throw new Error("empty");
         }
       } else {
-        seedSampleData();
-        await persist(true);
+        var legacyRaw = localStorage.getItem(LEGACY_KEY);
+        if(legacyRaw){
+          var legacy = JSON.parse(legacyRaw);
+          var board = normalizeBoard({ name: "Monthly", income: legacy.income, categories: legacy.categories });
+          appState.boards = [board];
+          appState.activeBoardId = board.id;
+          await persist(true);
+        } else {
+          seedSampleData();
+          await persist(true);
+        }
       }
     }catch(err){
       seedSampleData();
@@ -356,20 +449,10 @@
     renderAll();
   }
 
-  function normalizeCategory(c){
-    c.id = c.id || uid();
-    c.budget = Number(c.budget) || 0;
-    c.budgetOverride = !!c.budgetOverride;
-    c.planned = Array.isArray(c.planned) ? c.planned : (Array.isArray(c.items) ? c.items : []);
-    c.planned.forEach(function(i){ i.id = i.id || uid(); i.amount = Number(i.amount)||0; i.paid = !!i.paid; });
-    c.logs = Array.isArray(c.logs) ? c.logs : [];
-    c.logs.forEach(function(i){ i.id = i.id || uid(); i.amount = Number(i.amount)||0; });
-    return c;
-  }
-
   function seedSampleData(){
-    state.income = 3000;
-    state.categories = [
+    var monthly = createBoard("Monthly");
+    monthly.income = 3000;
+    monthly.categories = [
       { id: uid(), name: "Groceries", budget: 200, budgetOverride: true,
         planned: [],
         logs: [ { id: uid(), name: "Sainsbury's", amount: 46 } ] },
@@ -383,6 +466,8 @@
         ],
         logs: [] }
     ];
+    appState.boards = [monthly];
+    appState.activeBoardId = monthly.id;
   }
 
   function monthLabel(){
@@ -390,16 +475,86 @@
   }
   document.getElementById("month-label").textContent = monthLabel();
 
-  function escapeHtml(s){
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
-      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+  /* ---------------- Board switcher ---------------- */
+
+  function renderBoardSwitcher(){
+    $boardNameLabel.textContent = cb().name;
+
+    var html = "";
+    appState.boards.forEach(function(b){
+      var active = b.id === appState.activeBoardId;
+      html += '<div class="board-menu-item ' + (active?"active":"") + '" data-action="switch-board" data-id="' + b.id + '">';
+      html += '  <span class="bname">' + escapeHtml(b.name) + '</span>';
+      html += '  <span class="dot"></span>';
+      html += '</div>';
     });
+    $boardMenuList.innerHTML = html;
+
+    var atMax = appState.boards.length >= MAX_BOARDS;
+    $boardMenuAdd.disabled = atMax;
+    $boardMenuHint.textContent = atMax ? "You've reached the limit of " + MAX_BOARDS + " budgets" : appState.boards.length + " of " + MAX_BOARDS + " budgets";
   }
+
+  function openBoardMenu(){
+    boardMenuOpen = true;
+    $boardMenu.classList.add("open");
+    $boardChevron.classList.add("open");
+    $boardSwitcher.setAttribute("aria-expanded", "true");
+  }
+  function closeBoardMenu(){
+    boardMenuOpen = false;
+    $boardMenu.classList.remove("open");
+    $boardChevron.classList.remove("open");
+    $boardSwitcher.setAttribute("aria-expanded", "false");
+  }
+
+  $boardSwitcher.addEventListener("click", function(e){
+    e.stopPropagation();
+    if(boardMenuOpen) closeBoardMenu(); else openBoardMenu();
+  });
+
+  $boardMenuList.addEventListener("click", function(e){
+    var item = e.target.closest('[data-action="switch-board"]');
+    if(!item) return;
+    var id = item.getAttribute("data-id");
+    if(id !== appState.activeBoardId){
+      appState.activeBoardId = id;
+      openCategoryIds = {};
+      persist(true);
+      toast("Switched to " + cb().name);
+      renderAll();
+    }
+    closeBoardMenu();
+  });
+
+  $boardMenuAdd.addEventListener("click", function(e){
+    e.stopPropagation();
+    if(appState.boards.length >= MAX_BOARDS) return;
+    var name = window.prompt("Name this budget (e.g. Travel, House move)", "New Budget");
+    if(name === null) return;
+    name = name.trim();
+    if(!name) name = "New Budget";
+    var board = createBoard(name);
+    appState.boards.push(board);
+    appState.activeBoardId = board.id;
+    openCategoryIds = {};
+    persist(true);
+    toast('"' + name + '" created ✓');
+    closeBoardMenu();
+    renderAll();
+  });
+
+  document.addEventListener("click", function(e){
+    if(boardMenuOpen && !e.target.closest(".brand")){
+      closeBoardMenu();
+    }
+  });
 
   /* ---------------- OVERVIEW ---------------- */
 
   function renderOverview(){
-    var income = state.income || 0;
+    var board = cb();
+    var income = board.income || 0;
     var spent = totalSpent();
     var remaining = income - spent;
     var pct = income > 0 ? Math.min(100, (spent/income)*100) : (spent > 0 ? 100 : 0);
@@ -416,14 +571,14 @@
 
     html += '<div class="section-label">Categories</div>';
 
-    if(state.categories.length === 0){
+    if(board.categories.length === 0){
       html += '<div class="empty-state">';
       html += '  <h3>No categories yet</h3>';
       html += '  <p>Add a budget category — like Groceries or Bills — from the Edit tab to start tracking.</p>';
       html += '  <button class="btn" id="empty-go-edit">Add a category</button>';
       html += '</div>';
     } else {
-      state.categories.forEach(function(cat){
+      board.categories.forEach(function(cat){
         var cSpent = catSpent(cat);
         var cBudget = Number(cat.budget) || 0;
         var cRemaining = cBudget - cSpent;
@@ -502,7 +657,7 @@
     if(togglePaid){
       var cId = togglePaid.getAttribute("data-cat");
       var iId = togglePaid.getAttribute("data-id");
-      var cat = state.categories.find(function(c){ return c.id === cId; });
+      var cat = cb().categories.find(function(c){ return c.id === cId; });
       var item = cat && cat.planned.find(function(i){ return i.id === iId; });
       if(item){
         item.paid = !item.paid;
@@ -517,7 +672,7 @@
     if(delLog){
       var cId2 = delLog.getAttribute("data-cat");
       var lId = delLog.getAttribute("data-id");
-      var cat2 = state.categories.find(function(c){ return c.id === cId2; });
+      var cat2 = cb().categories.find(function(c){ return c.id === cId2; });
       if(cat2){
         cat2.logs = cat2.logs.filter(function(l){ return l.id !== lId; });
         persist(true);
@@ -536,7 +691,7 @@
       var amount = clampNum(amtEl.value);
       if(!name){ toast("Add a short description first"); nameEl.focus(); return; }
       if(amount <= 0){ toast("Enter an amount"); amtEl.focus(); return; }
-      var cat3 = state.categories.find(function(c){ return c.id === cId3; });
+      var cat3 = cb().categories.find(function(c){ return c.id === cId3; });
       if(cat3){
         cat3.logs = cat3.logs || [];
         cat3.logs.push({ id: uid(), name: name, amount: amount });
@@ -551,12 +706,27 @@
   /* ---------------- EDIT ---------------- */
 
   function renderEdit(){
+    var board = cb();
     var html = "";
+
+    html += '<div class="section-label">This budget</div>';
+    html += '<div class="edit-card">';
+    html += '  <label class="flabel">Budget name</label>';
+    html += '  <div class="row-inline">';
+    html += '    <div><input type="text" id="board-name-input" value="' + escapeHtml(board.name) + '"></div>';
+    html += '    <button class="btn small" id="save-board-name">Save</button>';
+    html += '  </div>';
+    if(appState.boards.length > 1){
+      html += '  <button class="btn danger small" style="margin-top:10px;" id="delete-board">Delete this budget</button>';
+    } else {
+      html += '  <p class="hint">You need at least one budget — add another before deleting this one.</p>';
+    }
+    html += '</div>';
 
     html += '<div class="edit-card">';
     html += '  <label class="flabel">Monthly income</label>';
     html += '  <div class="row-inline">';
-    html += '    <div><input type="number" step="0.01" inputmode="decimal" id="income-input" value="' + (state.income || 0) + '"></div>';
+    html += '    <div><input type="number" step="0.01" inputmode="decimal" id="income-input" value="' + (board.income || 0) + '"></div>';
     html += '    <button class="btn" id="save-income">Save</button>';
     html += '  </div>';
     html += '</div>';
@@ -569,13 +739,13 @@
     html += '  <button class="btn block" id="add-category">+ Add category</button>';
     html += '</div>';
 
-    html += '<div class="section-label">Your categories</div>';
+    html += '<div class="section-label">Categories in ' + escapeHtml(board.name) + '</div>';
 
-    if(state.categories.length === 0){
+    if(board.categories.length === 0){
       html += '<p class="hint">Nothing yet — add your first category above, then set up sub-expenses under it.</p>';
     }
 
-    state.categories.forEach(function(cat){
+    board.categories.forEach(function(cat){
       var auto = autoBudget(cat);
       html += '<div class="edit-card" data-cat-card="' + cat.id + '">';
       html += '  <div class="edit-card-head">';
@@ -620,9 +790,36 @@
 
     $edit.innerHTML = html;
 
+    document.getElementById("save-board-name").addEventListener("click", function(){
+      var nameEl = document.getElementById("board-name-input");
+      var val = nameEl.value.trim();
+      if(!val){ toast("Give this budget a name"); nameEl.focus(); return; }
+      cb().name = val;
+      flashSaved(this);
+      persist(true);
+      renderBoardSwitcher();
+      renderEdit();
+    });
+
+    var deleteBoardBtn = document.getElementById("delete-board");
+    if(deleteBoardBtn){
+      deleteBoardBtn.addEventListener("click", function(){
+        if(appState.boards.length <= 1) return;
+        if(confirm('Delete "' + cb().name + '" and everything in it? This can\'t be undone.')){
+          var idx = appState.boards.findIndex(function(b){ return b.id === appState.activeBoardId; });
+          appState.boards.splice(idx, 1);
+          appState.activeBoardId = appState.boards[0].id;
+          openCategoryIds = {};
+          persist(true);
+          toast("Budget deleted");
+          renderAll();
+        }
+      });
+    }
+
     document.getElementById("save-income").addEventListener("click", function(){
       var val = clampNum(document.getElementById("income-input").value);
-      state.income = val;
+      cb().income = val;
       flashSaved(this);
       persist();
       renderOverview();
@@ -634,7 +831,7 @@
       var name = nameEl.value.trim();
       if(!name){ toast("Give the category a name first"); nameEl.focus(); return; }
       var budget = clampNum(budgetEl.value);
-      state.categories.push({
+      cb().categories.push({
         id: uid(), name: name, budget: budget, budgetOverride: budget !== 0,
         planned: [], logs: []
       });
@@ -669,7 +866,7 @@
     if(action === "save-budget"){
       var id = btn.getAttribute("data-id");
       var input = $edit.querySelector('.cat-budget-input[data-id="' + id + '"]');
-      var cat = state.categories.find(function(c){ return c.id === id; });
+      var cat = cb().categories.find(function(c){ return c.id === id; });
       if(cat && input){
         var newVal = clampNum(input.value);
         var auto = autoBudget(cat);
@@ -690,7 +887,7 @@
 
     if(action === "reset-budget"){
       var idR = btn.getAttribute("data-id");
-      var catR = state.categories.find(function(c){ return c.id === idR; });
+      var catR = cb().categories.find(function(c){ return c.id === idR; });
       if(catR){
         catR.budgetOverride = false;
         catR.budget = autoBudget(catR);
@@ -704,7 +901,7 @@
     if(action === "delete-cat"){
       var id2 = btn.getAttribute("data-id");
       if(confirm("Delete this category and everything in it?")){
-        state.categories = state.categories.filter(function(c){ return c.id !== id2; });
+        cb().categories = cb().categories.filter(function(c){ return c.id !== id2; });
         persist(true);
         toast("Category deleted");
         renderEdit();
@@ -719,7 +916,7 @@
       var name = nameInput.value.trim();
       if(!name){ toast("Give the item a name first"); nameInput.focus(); return; }
       var amount = clampNum(amtInput.value);
-      var cat = state.categories.find(function(c){ return c.id === cId; });
+      var cat = cb().categories.find(function(c){ return c.id === cId; });
       if(cat){
         cat.planned = cat.planned || [];
         cat.planned.push({ id: uid(), name: name, amount: amount, paid: false });
@@ -736,7 +933,7 @@
       var iId = btn.getAttribute("data-id");
       var nameEl = $edit.querySelector('.item-name-input[data-id="' + iId + '"]');
       var amtEl = $edit.querySelector('.item-amount-input[data-id="' + iId + '"]');
-      var cat2 = state.categories.find(function(c){ return c.id === cId2; });
+      var cat2 = cb().categories.find(function(c){ return c.id === cId2; });
       var item = cat2 && cat2.planned.find(function(i){ return i.id === iId; });
       if(item){
         item.name = nameEl.value.trim() || item.name;
@@ -752,7 +949,7 @@
     if(action === "delete-item"){
       var cId3 = btn.getAttribute("data-cat");
       var iId2 = btn.getAttribute("data-id");
-      var cat3 = state.categories.find(function(c){ return c.id === cId3; });
+      var cat3 = cb().categories.find(function(c){ return c.id === cId3; });
       if(cat3){
         cat3.planned = cat3.planned.filter(function(i){ return i.id !== iId2; });
         recalcAutoBudget(cat3);
@@ -785,7 +982,7 @@
   /* ---------------- Download / Upload ---------------- */
 
   document.getElementById("btn-download").addEventListener("click", function(){
-    var payload = JSON.stringify({ income: state.income, categories: state.categories, exportedAt: new Date().toISOString() }, null, 2);
+    var payload = JSON.stringify({ boards: appState.boards, activeBoardId: appState.activeBoardId, exportedAt: new Date().toISOString() }, null, 2);
     var blob = new Blob([payload], { type: "application/json" });
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
@@ -811,12 +1008,19 @@
     reader.onload = function(){
       try{
         var parsed = JSON.parse(reader.result);
-        if(typeof parsed.income !== "number" || !Array.isArray(parsed.categories)){
+        var boards;
+        if(Array.isArray(parsed.boards) && parsed.boards.length){
+          boards = parsed.boards.map(normalizeBoard);
+        } else if(typeof parsed.income === "number" && Array.isArray(parsed.categories)){
+          // legacy single-board backup
+          boards = [ normalizeBoard({ name: "Monthly", income: parsed.income, categories: parsed.categories }) ];
+        } else {
           throw new Error("bad shape");
         }
-        parsed.categories = parsed.categories.map(normalizeCategory);
-        state.income = parsed.income;
-        state.categories = parsed.categories;
+        appState.boards = boards;
+        appState.activeBoardId = (parsed.activeBoardId && boards.some(function(b){return b.id===parsed.activeBoardId;}))
+          ? parsed.activeBoardId : boards[0].id;
+        openCategoryIds = {};
         persist(true);
         toast("Backup imported ✓");
         renderAll();
@@ -828,6 +1032,7 @@
   });
 
   function renderAll(){
+    renderBoardSwitcher();
     renderOverview();
     renderEdit();
   }
