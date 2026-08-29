@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Ledger">
+<meta name="theme-color" content="#F5F4EE">
+<title>Ledger — Monthly Expenses</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F5F4EE;
+    --paper-raised:#FCFBF7;
+    --ink:#1C2B24;
+    --ink-soft:#5B6B62;
+    --line:#CFC8B4;
+    --teal:#2F6F5E;
+    --teal-deep:#1E4A3E;
+    --brick:#A8442E;
+    --gold:#C98A2C;
+    --radius:10px;
+    --shadow: 0 1px 2px rgba(28,43,36,0.06), 0 4px 14px rgba(28,43,36,0.06);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Inter', sans-serif;
+    min-height:100vh;
+    display:flex;
+    justify-content:center;
+  }
+  #app{
+    width:100%;
+    max-width:480px;
+    min-height:100vh;
+    background:var(--paper);
+    display:flex;
+    flex-direction:column;
+    position:relative;
+  }
+  .num{ font-family:'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+
+  /* ---------- Topbar ---------- */
+  .topbar{
+    position:sticky; top:0; z-index:20;
+    background:var(--paper);
+    padding:18px 18px 10px;
+    border-bottom:1px solid var(--line);
+  }
+  .topbar-row{ display:flex; align-items:flex-start; justify-content:space-between; }
+  .brand h1{
+    font-family:'DM Serif Display', serif;
+    font-size:26px; margin:0; letter-spacing:0.2px; color:var(--ink);
+  }
+  .brand .month{
+    font-size:12px; color:var(--ink-soft); margin-top:2px; letter-spacing:0.06em; text-transform:uppercase;
+  }
+  .icon-btn{
+    width:36px; height:36px; border-radius:8px; border:1px solid var(--line);
+    background:var(--paper-raised); display:flex; align-items:center; justify-content:center;
+    cursor:pointer; color:var(--ink); transition: background .15s ease, transform .1s ease;
+  }
+  .icon-btn:active{ transform: scale(0.94); background:#EFEBDD; }
+  .topbar-actions{ display:flex; gap:8px; }
+
+  /* ---------- Views ---------- */
+  main.view{ padding:16px 18px 100px; flex:1; }
+  main.view.hidden{ display:none; }
+
+  /* ---------- Hero / receipt header ---------- */
+  .hero{
+    background:var(--paper-raised);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    padding:18px 18px 14px;
+    box-shadow:var(--shadow);
+    margin-top:16px;
+  }
+  .hero-title{
+    font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:10px;
+  }
+  .ledger-row{
+    display:flex; align-items:baseline; gap:8px; padding:5px 0;
+  }
+  .ledger-row .label{ font-size:14px; color:var(--ink); white-space:nowrap; }
+  .leader{
+    flex:1; border-bottom:1px dotted var(--line); height:1px; margin-bottom:5px;
+  }
+  .ledger-row .amount{ font-size:14px; font-weight:600; white-space:nowrap; }
+  .ledger-row.total .label, .ledger-row.total .amount{ font-size:17px; }
+  .ledger-row.total{ border-top:1px dashed var(--line); margin-top:6px; padding-top:10px; }
+  .amount.warn{ color:var(--brick); }
+  .amount.good{ color:var(--teal-deep); }
+
+  .bar-track{
+    position:relative; height:10px; border-radius:3px; background:#E9E4D2; overflow:hidden; margin-top:12px;
+    background-image: repeating-linear-gradient(90deg, transparent, transparent calc(10% - 1px), rgba(28,43,36,0.14) calc(10% - 1px), rgba(28,43,36,0.14) 10%);
+  }
+  .bar-fill{ position:absolute; left:0; top:0; bottom:0; background:var(--teal); border-radius:3px; transition: width .35s ease; }
+  .bar-fill.over{ background:var(--brick); }
+
+  /* ---------- Category cards (overview) ---------- */
+  .section-label{
+    font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:var(--ink-soft);
+    margin:22px 2px 8px;
+  }
+  .cat-card{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius);
+    margin-bottom:12px; box-shadow:var(--shadow); overflow:hidden;
+  }
+  .cat-head{
+    display:flex; align-items:center; justify-content:space-between; padding:14px 16px; cursor:pointer;
+  }
+  .cat-head-left{ flex:1; min-width:0; }
+  .cat-name{ font-size:15px; font-weight:600; }
+  .cat-sub{ font-size:12px; color:var(--ink-soft); margin-top:2px; }
+  .cat-amounts{ text-align:right; }
+  .cat-amounts .remaining{ font-size:15px; font-weight:600; }
+  .cat-amounts .of{ font-size:11px; color:var(--ink-soft); margin-top:2px; }
+  .chev{ margin-left:10px; color:var(--ink-soft); transition: transform .2s ease; }
+  .chev.open{ transform: rotate(180deg); }
+  .cat-bar-wrap{ padding:0 16px 14px; }
+  .cat-items{
+    border-top:1px dashed var(--line); padding:6px 16px 12px; display:none;
+  }
+  .cat-items.open{ display:block; }
+  .item-row{ display:flex; align-items:baseline; gap:8px; padding:6px 0; font-size:13px; }
+  .item-row .label{ color:var(--ink-soft); }
+  .item-row .amount{ font-size:13px; font-weight:500; }
+  .empty-items{ font-size:12px; color:var(--ink-soft); padding:8px 0 2px; font-style:italic; }
+
+  .empty-state{
+    text-align:center; padding:50px 20px; color:var(--ink-soft);
+  }
+  .empty-state h3{ font-family:'DM Serif Display', serif; color:var(--ink); font-size:20px; margin-bottom:6px; font-weight:normal;}
+  .empty-state p{ font-size:13px; line-height:1.5; }
+  .empty-state button{ margin-top:16px; }
+
+  /* ---------- Forms / Edit view ---------- */
+  .field-group{ margin-bottom:10px; }
+  label.flabel{ display:block; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:5px; }
+  input[type=text], input[type=number]{
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px;
+    background:#fff; font-family:'IBM Plex Mono', monospace; font-size:15px; color:var(--ink);
+  }
+  input[type=text]{ font-family:'Inter', sans-serif; font-size:14px; }
+  input:focus{ outline:2px solid var(--teal); outline-offset:1px; border-color:var(--teal); }
+
+  .btn{
+    display:inline-flex; align-items:center; justify-content:center; gap:6px;
+    padding:10px 16px; border-radius:8px; border:1px solid var(--teal-deep);
+    background:var(--teal); color:#fff; font-weight:600; font-size:13.5px;
+    cursor:pointer; transition: transform .1s ease, background .15s ease;
+  }
+  .btn:active{ transform: scale(0.97); }
+  .btn.secondary{ background:transparent; color:var(--teal-deep); }
+  .btn.danger{ background:transparent; color:var(--brick); border-color:var(--brick); }
+  .btn.small{ padding:7px 12px; font-size:12.5px; }
+  .btn.block{ width:100%; }
+  .btn.saved{ background:var(--teal-deep); }
+
+  .row-inline{ display:flex; gap:8px; align-items:flex-end; }
+  .row-inline > div{ flex:1; }
+
+  .edit-card{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius);
+    padding:16px; margin-bottom:14px; box-shadow:var(--shadow);
+  }
+  .edit-card-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+  .edit-card-head .cat-name{ font-size:16px; }
+  .icon-btn.ghost{ border:none; background:transparent; width:28px; height:28px; }
+
+  .items-list{ margin-top:12px; }
+  .item-edit-row{
+    display:flex; gap:6px; align-items:center; padding:8px 0; border-top:1px dashed var(--line);
+  }
+  .item-edit-row input[type=text]{ flex:1.4; }
+  .item-edit-row input[type=number]{ flex:1; }
+  .item-edit-row .icon-btn{ width:32px; height:32px; flex-shrink:0; }
+
+  .add-item-row{
+    display:flex; gap:6px; align-items:center; margin-top:10px;
+  }
+  .add-item-row input[type=text]{ flex:1.4; }
+  .add-item-row input[type=number]{ flex:1; }
+  .add-item-row .icon-btn{ width:36px; height:36px; flex-shrink:0; background:var(--teal); color:#fff; border-color:var(--teal-deep); }
+
+  .save-row{ display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+
+  .hint{ font-size:11.5px; color:var(--ink-soft); margin:2px 0 16px; line-height:1.5; }
+
+  /* ---------- Bottom tab bar ---------- */
+  .tabbar{
+    position:sticky; bottom:0; z-index:20;
+    display:flex; background:var(--paper-raised); border-top:1px solid var(--line);
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  .tab-btn{
+    flex:1; background:none; border:none; padding:12px 0 10px; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; gap:5px;
+    color:var(--ink-soft); font-family:'Inter', sans-serif; font-size:11.5px; font-weight:600;
+    letter-spacing:0.03em;
+  }
+  .punch{ width:6px; height:6px; border-radius:50%; background:transparent; border:1.4px solid var(--ink-soft); }
+  .tab-btn.active{ color:var(--teal-deep); }
+  .tab-btn.active .punch{ background:var(--teal); border-color:var(--teal); }
+
+  /* ---------- Toast ---------- */
+  #toast{
+    position:fixed; left:50%; bottom:78px; transform:translate(-50%, 14px);
+    background:var(--ink); color:var(--paper); padding:10px 18px; border-radius:8px;
+    font-size:13px; opacity:0; pointer-events:none; transition: opacity .25s ease, transform .25s ease;
+    z-index:50; max-width:88%; text-align:center;
+  }
+  #toast.show{ opacity:1; transform:translate(-50%, 0); }
+
+  #file-input{ display:none; }
+
+  ::selection{ background: var(--teal); color:#fff; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="topbar">
+    <div class="topbar-row">
+      <div class="brand">
+        <h1>Ledger</h1>
+        <div class="month" id="month-label"></div>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="btn-download" title="Download backup" aria-label="Download backup">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-upload" title="Upload backup" aria-label="Upload backup">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>
+        </button>
+        <input type="file" id="file-input" accept="application/json">
+      </div>
+    </div>
+  </div>
+
+  <main class="view" id="view-overview"></main>
+  <main class="view hidden" id="view-edit"></main>
+
+  <nav class="tabbar">
+    <button class="tab-btn active" data-tab="overview"><span class="punch"></span>Overview</button>
+    <button class="tab-btn" data-tab="edit"><span class="punch"></span>Edit</button>
+  </nav>
+
+  <div id="toast"></div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var STORAGE_KEY = "ledger-data-v1";
+  var state = { income: 0, categories: [] };
+  var openCategoryIds = {}; // overview expand/collapse state
+  var currentTab = "overview";
+
+  var $overview = document.getElementById("view-overview");
+  var $edit = document.getElementById("view-edit");
+  var $toast = document.getElementById("toast");
+
+  function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+
+  function fmt(n){
+    n = Number(n) || 0;
+    var neg = n < 0;
+    var v = Math.abs(n).toLocaleString('en-GB', {minimumFractionDigits:2, maximumFractionDigits:2});
+    return (neg ? "-£" : "£") + v;
+  }
+
+  function clampNum(v){
+    var n = parseFloat(v);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function toast(msg){
+    $toast.textContent = msg;
+    $toast.classList.add("show");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function(){ $toast.classList.remove("show"); }, 1800);
+  }
+
+  function catSpent(cat){
+    return (cat.items || []).reduce(function(s,i){ return s + (Number(i.amount)||0); }, 0);
+  }
+  function totalBudget(){
+    return state.categories.reduce(function(s,c){ return s + (Number(c.budget)||0); }, 0);
+  }
+  function totalSpent(){
+    return state.categories.reduce(function(s,c){ return s + catSpent(c); }, 0);
+  }
+
+  async function persist(silent){
+    try{
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      if(!silent) toast("Saved ✓");
+    }catch(err){
+      console.error("Save failed", err);
+      toast("Couldn't save — try Download to back up manually");
+    }
+  }
+
+  async function load(){
+    try{
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if(raw){
+        var parsed = JSON.parse(raw);
+        if(parsed && typeof parsed === "object"){
+          state.income = Number(parsed.income) || 0;
+          state.categories = Array.isArray(parsed.categories) ? parsed.categories : [];
+        }
+      } else {
+        seedSampleData();
+        await persist(true);
+      }
+    }catch(err){
+      seedSampleData();
+    }
+    renderAll();
+  }
+
+  function seedSampleData(){
+    state.income = 3000;
+    state.categories = [
+      { id: uid(), name: "Groceries", budget: 200, items: [
+        { id: uid(), name: "Weekly shop", amount: 46 }
+      ]},
+      { id: uid(), name: "Subscriptions", budget: 40, items: [
+        { id: uid(), name: "Spotify", amount: 12.99 }
+      ]},
+      { id: uid(), name: "Bills", budget: 900, items: [] }
+    ];
+  }
+
+  function monthLabel(){
+    return new Date().toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }).toUpperCase();
+  }
+  document.getElementById("month-label").textContent = monthLabel();
+
+  /* ---------------- OVERVIEW ---------------- */
+
+  function renderOverview(){
+    var income = state.income || 0;
+    var spent = totalSpent();
+    var budgeted = totalBudget();
+    var remaining = income - spent;
+    var pct = income > 0 ? Math.min(100, (spent/income)*100) : (spent > 0 ? 100 : 0);
+    var over = spent > income;
+
+    var html = "";
+    html += '<div class="hero">';
+    html += '  <div class="hero-title">This month</div>';
+    html += row("Income", fmt(income));
+    html += row("Budgeted across categories", fmt(budgeted));
+    html += row("Spent so far", fmt(spent));
+    html += '  <div class="ledger-row total">';
+    html += '    <span class="label">Remaining</span><span class="leader"></span>';
+    html += '    <span class="amount num ' + (remaining < 0 ? "warn":"good") + '">' + fmt(remaining) + '</span>';
+    html += '  </div>';
+    html += '  <div class="bar-track"><div class="bar-fill ' + (over?"over":"") + '" style="width:' + pct + '%"></div></div>';
+    html += '</div>';
+
+    html += '<div class="section-label">Categories</div>';
+
+    if(state.categories.length === 0){
+      html += '<div class="empty-state">';
+      html += '  <h3>No categories yet</h3>';
+      html += '  <p>Add a budget category — like Groceries or Bills — from the Edit tab to start tracking.</p>';
+      html += '  <button class="btn" id="empty-go-edit">Add a category</button>';
+      html += '</div>';
+    } else {
+      state.categories.forEach(function(cat){
+        var cSpent = catSpent(cat);
+        var cBudget = Number(cat.budget) || 0;
+        var cRemaining = cBudget - cSpent;
+        var cPct = cBudget > 0 ? Math.min(100, (cSpent/cBudget)*100) : (cSpent>0?100:0);
+        var cOver = cSpent > cBudget && cBudget > 0;
+        var isOpen = !!openCategoryIds[cat.id];
+
+        html += '<div class="cat-card">';
+        html += '  <div class="cat-head" data-action="toggle-cat" data-id="' + cat.id + '">';
+        html += '    <div class="cat-head-left">';
+        html += '      <div class="cat-name">' + escapeHtml(cat.name) + '</div>';
+        html += '      <div class="cat-sub num">' + fmt(cSpent) + ' of ' + fmt(cBudget) + '</div>';
+        html += '    </div>';
+        html += '    <div class="cat-amounts">';
+        html += '      <div class="remaining num ' + (cRemaining<0?"warn":"good") + '">' + fmt(cRemaining) + '</div>';
+        html += '      <div class="of">remaining</div>';
+        html += '    </div>';
+        html += '    <div class="chev ' + (isOpen?"open":"") + '"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></div>';
+        html += '  </div>';
+        html += '  <div class="cat-bar-wrap"><div class="bar-track"><div class="bar-fill ' + (cOver?"over":"") + '" style="width:' + cPct + '%"></div></div></div>';
+        html += '  <div class="cat-items ' + (isOpen?"open":"") + '">';
+        if(cat.items && cat.items.length){
+          cat.items.forEach(function(it){
+            html += '<div class="item-row"><span class="label">' + escapeHtml(it.name || "Untitled") + '</span><span class="leader"></span><span class="amount num">' + fmt(it.amount) + '</span></div>';
+          });
+        } else {
+          html += '<div class="empty-items">No spending logged yet.</div>';
+        }
+        html += '  </div>';
+        html += '</div>';
+      });
+    }
+
+    $overview.innerHTML = html;
+
+    var emptyBtn = document.getElementById("empty-go-edit");
+    if(emptyBtn) emptyBtn.addEventListener("click", function(){ switchTab("edit"); });
+  }
+
+  function row(label, amount, cls){
+    return '<div class="ledger-row"><span class="label">' + label + '</span><span class="leader"></span><span class="amount num ' + (cls||"") + '">' + amount + '</span></div>';
+  }
+
+  function escapeHtml(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  $overview.addEventListener("click", function(e){
+    var toggle = e.target.closest('[data-action="toggle-cat"]');
+    if(toggle){
+      var id = toggle.getAttribute("data-id");
+      openCategoryIds[id] = !openCategoryIds[id];
+      renderOverview();
+    }
+  });
+
+  /* ---------------- EDIT ---------------- */
+
+  function renderEdit(){
+    var html = "";
+
+    html += '<div class="edit-card">';
+    html += '  <label class="flabel">Monthly income</label>';
+    html += '  <div class="row-inline">';
+    html += '    <div><input type="number" step="0.01" inputmode="decimal" id="income-input" value="' + (state.income || 0) + '"></div>';
+    html += '    <button class="btn" id="save-income">Save</button>';
+    html += '  </div>';
+    html += '</div>';
+
+    html += '<div class="section-label">Add a category</div>';
+    html += '<div class="edit-card">';
+    html += '  <div class="field-group"><label class="flabel">Category name</label><input type="text" id="new-cat-name" placeholder="e.g. Groceries"></div>';
+    html += '  <div class="field-group"><label class="flabel">Budget</label><input type="number" step="0.01" inputmode="decimal" id="new-cat-budget" placeholder="0.00"></div>';
+    html += '  <button class="btn block" id="add-category">+ Add category</button>';
+    html += '</div>';
+
+    html += '<div class="section-label">Your categories</div>';
+
+    if(state.categories.length === 0){
+      html += '<p class="hint">Nothing yet — add your first category above, then log sub-expenses under it as you spend.</p>';
+    }
+
+    state.categories.forEach(function(cat){
+      var spent = catSpent(cat);
+      html += '<div class="edit-card" data-cat-card="' + cat.id + '">';
+      html += '  <div class="edit-card-head">';
+      html += '    <div class="cat-name">' + escapeHtml(cat.name) + '</div>';
+      html += '    <button class="icon-btn ghost" data-action="delete-cat" data-id="' + cat.id + '" title="Delete category" aria-label="Delete category">';
+      html += '      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+      html += '    </button>';
+      html += '  </div>';
+
+      html += '  <label class="flabel">Budget</label>';
+      html += '  <div class="row-inline">';
+      html += '    <div><input type="number" step="0.01" inputmode="decimal" class="cat-budget-input" data-id="' + cat.id + '" value="' + (cat.budget || 0) + '"></div>';
+      html += '    <button class="btn small" data-action="save-budget" data-id="' + cat.id + '">Save</button>';
+      html += '  </div>';
+      html += '  <p class="hint" style="margin-top:8px;margin-bottom:0;">Spent so far: <span class="num">' + fmt(spent) + '</span></p>';
+
+      html += '  <div class="items-list">';
+      html += '    <label class="flabel">Sub-expenses</label>';
+      (cat.items||[]).forEach(function(it){
+        html += '<div class="item-edit-row" data-item-row="' + it.id + '">';
+        html += '  <input type="text" class="item-name-input" data-cat="' + cat.id + '" data-id="' + it.id + '" value="' + escapeHtml(it.name) + '" placeholder="Item">';
+        html += '  <input type="number" step="0.01" inputmode="decimal" class="item-amount-input" data-cat="' + cat.id + '" data-id="' + it.id + '" value="' + (it.amount||0) + '">';
+        html += '  <button class="icon-btn" data-action="save-item" data-cat="' + cat.id + '" data-id="' + it.id + '" title="Save item" aria-label="Save item">';
+        html += '    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+        html += '  </button>';
+        html += '  <button class="icon-btn" data-action="delete-item" data-cat="' + cat.id + '" data-id="' + it.id + '" title="Delete item" aria-label="Delete item">';
+        html += '    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+        html += '  </button>';
+        html += '</div>';
+      });
+      html += '  </div>';
+
+      html += '  <div class="add-item-row">';
+      html += '    <input type="text" class="new-item-name" data-cat="' + cat.id + '" placeholder="e.g. Spotify">';
+      html += '    <input type="number" step="0.01" inputmode="decimal" class="new-item-amount" data-cat="' + cat.id + '" placeholder="0.00">';
+      html += '    <button class="icon-btn" data-action="add-item" data-cat="' + cat.id + '" title="Add sub-expense" aria-label="Add sub-expense">';
+      html += '      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
+      html += '    </button>';
+      html += '  </div>';
+
+      html += '</div>';
+    });
+
+    $edit.innerHTML = html;
+
+    document.getElementById("save-income").addEventListener("click", function(){
+      var val = clampNum(document.getElementById("income-input").value);
+      state.income = val;
+      flashSaved(this);
+      persist();
+      renderOverview();
+    });
+
+    document.getElementById("add-category").addEventListener("click", function(){
+      var nameEl = document.getElementById("new-cat-name");
+      var budgetEl = document.getElementById("new-cat-budget");
+      var name = nameEl.value.trim();
+      if(!name){ toast("Give the category a name first"); nameEl.focus(); return; }
+      var budget = clampNum(budgetEl.value);
+      state.categories.push({ id: uid(), name: name, budget: budget, items: [] });
+      persist(true);
+      toast("Category added ✓");
+      renderEdit();
+      renderOverview();
+    });
+  }
+
+  function flashSaved(btn){
+    var original = btn.textContent;
+    btn.classList.add("saved");
+    btn.textContent = "Saved ✓";
+    setTimeout(function(){
+      btn.classList.remove("saved");
+      btn.textContent = original;
+    }, 1100);
+  }
+
+  $edit.addEventListener("click", function(e){
+    var btn = e.target.closest("[data-action]");
+    if(!btn) return;
+    var action = btn.getAttribute("data-action");
+    var catId = btn.getAttribute("data-cat") || btn.getAttribute("data-id");
+
+    if(action === "save-budget"){
+      var id = btn.getAttribute("data-id");
+      var input = $edit.querySelector('.cat-budget-input[data-id="' + id + '"]');
+      var cat = state.categories.find(function(c){ return c.id === id; });
+      if(cat && input){
+        cat.budget = clampNum(input.value);
+        flashSaved(btn);
+        persist(true);
+        toast("Budget saved ✓");
+        renderOverview();
+      }
+    }
+
+    if(action === "delete-cat"){
+      var id2 = btn.getAttribute("data-id");
+      if(confirm("Delete this category and all its sub-expenses?")){
+        state.categories = state.categories.filter(function(c){ return c.id !== id2; });
+        persist(true);
+        toast("Category deleted");
+        renderEdit();
+        renderOverview();
+      }
+    }
+
+    if(action === "add-item"){
+      var cId = btn.getAttribute("data-cat");
+      var nameInput = $edit.querySelector('.new-item-name[data-cat="' + cId + '"]');
+      var amtInput = $edit.querySelector('.new-item-amount[data-cat="' + cId + '"]');
+      var name = nameInput.value.trim();
+      if(!name){ toast("Give the item a name first"); nameInput.focus(); return; }
+      var amount = clampNum(amtInput.value);
+      var cat = state.categories.find(function(c){ return c.id === cId; });
+      if(cat){
+        cat.items = cat.items || [];
+        cat.items.push({ id: uid(), name: name, amount: amount });
+        persist(true);
+        toast("Sub-expense added ✓");
+        renderEdit();
+        renderOverview();
+      }
+    }
+
+    if(action === "save-item"){
+      var cId2 = btn.getAttribute("data-cat");
+      var iId = btn.getAttribute("data-id");
+      var nameEl = $edit.querySelector('.item-name-input[data-id="' + iId + '"]');
+      var amtEl = $edit.querySelector('.item-amount-input[data-id="' + iId + '"]');
+      var cat2 = state.categories.find(function(c){ return c.id === cId2; });
+      var item = cat2 && cat2.items.find(function(i){ return i.id === iId; });
+      if(item){
+        item.name = nameEl.value.trim() || item.name;
+        item.amount = clampNum(amtEl.value);
+        btn.style.color = "var(--teal)";
+        persist(true);
+        toast("Saved ✓");
+        renderOverview();
+        renderEdit();
+      }
+    }
+
+    if(action === "delete-item"){
+      var cId3 = btn.getAttribute("data-cat");
+      var iId2 = btn.getAttribute("data-id");
+      var cat3 = state.categories.find(function(c){ return c.id === cId3; });
+      if(cat3){
+        cat3.items = cat3.items.filter(function(i){ return i.id !== iId2; });
+        persist(true);
+        toast("Item deleted");
+        renderEdit();
+        renderOverview();
+      }
+    }
+  });
+
+  /* ---------------- Tabs ---------------- */
+
+  function switchTab(tab){
+    currentTab = tab;
+    document.querySelectorAll(".tab-btn").forEach(function(b){
+      b.classList.toggle("active", b.getAttribute("data-tab") === tab);
+    });
+    $overview.classList.toggle("hidden", tab !== "overview");
+    $edit.classList.toggle("hidden", tab !== "edit");
+    if(tab === "overview") renderOverview();
+    if(tab === "edit") renderEdit();
+    window.scrollTo(0,0);
+  }
+
+  document.querySelectorAll(".tab-btn").forEach(function(b){
+    b.addEventListener("click", function(){ switchTab(b.getAttribute("data-tab")); });
+  });
+
+  /* ---------------- Download / Upload ---------------- */
+
+  document.getElementById("btn-download").addEventListener("click", function(){
+    var payload = JSON.stringify({ income: state.income, categories: state.categories, exportedAt: new Date().toISOString() }, null, 2);
+    var blob = new Blob([payload], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    var stamp = new Date().toISOString().slice(0,10);
+    a.href = url;
+    a.download = "ledger-backup-" + stamp + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast("Backup downloaded ✓");
+  });
+
+  var fileInput = document.getElementById("file-input");
+  document.getElementById("btn-upload").addEventListener("click", function(){
+    fileInput.value = "";
+    fileInput.click();
+  });
+  fileInput.addEventListener("change", function(){
+    var file = fileInput.files[0];
+    if(!file) return;
+    var reader = new FileReader();
+    reader.onload = function(){
+      try{
+        var parsed = JSON.parse(reader.result);
+        if(typeof parsed.income !== "number" || !Array.isArray(parsed.categories)){
+          throw new Error("bad shape");
+        }
+        // basic normalisation / id safety
+        parsed.categories.forEach(function(c){
+          if(!c.id) c.id = uid();
+          if(!Array.isArray(c.items)) c.items = [];
+          c.items.forEach(function(i){ if(!i.id) i.id = uid(); });
+        });
+        state.income = parsed.income;
+        state.categories = parsed.categories;
+        persist(true);
+        toast("Backup imported ✓");
+        renderAll();
+      }catch(err){
+        toast("That file doesn't look like a valid backup");
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  function renderAll(){
+    renderOverview();
+    renderEdit();
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>
