@@ -178,10 +178,13 @@
   .plan-row.paid .amount{ color:var(--ink-soft); }
   .plan-row .amount{ font-size:13.5px; font-weight:500; }
 
-  .log-row{ display:flex; align-items:center; gap:6px; padding:7px 0; border-top:1px dashed var(--line); font-size:13px; }
-  .log-row:first-child{ border-top:none; }
-  .log-row .label{ color:var(--ink); }
-  .log-row .amount{ font-size:13px; font-weight:500; }
+  .item-block{ }
+  .item-block .plan-row{ border-top:1px dashed var(--line); }
+  .item-block:first-child .plan-row{ border-top:none; }
+  .item-sub{ margin:2px 0 12px 29px; padding-left:12px; border-left:2px solid var(--line); }
+  .log-row-small{ display:flex; align-items:center; gap:6px; padding:5px 0; font-size:12.5px; }
+  .log-row-small .label{ color:var(--ink); }
+  .log-row-small .amount{ font-size:12.5px; font-weight:500; }
 
   .empty-items{ font-size:12px; color:var(--ink-soft); padding:6px 0 2px; font-style:italic; }
 
@@ -189,6 +192,9 @@
   .quick-add-row input[type=text]{ flex:1.4; }
   .quick-add-row input[type=number]{ flex:1; }
   .quick-add-row .icon-btn{ width:36px; height:36px; flex-shrink:0; background:var(--teal); color:#fff; border-color:var(--teal-deep); }
+  .quick-add-row.small{ margin-top:6px; }
+  .quick-add-row.small input[type=text], .quick-add-row.small input[type=number]{ padding:7px 9px; font-size:13px; }
+  .quick-add-row.small .icon-btn{ width:30px; height:30px; }
 
   .empty-state{ text-align:center; padding:50px 20px; color:var(--ink-soft); }
   .empty-state h3{ font-family:'DM Serif Display', serif; color:var(--ink); font-size:20px; margin-bottom:6px; font-weight:normal;}
@@ -381,9 +387,19 @@
     c.budget = Number(c.budget) || 0;
     c.budgetOverride = !!c.budgetOverride;
     c.planned = Array.isArray(c.planned) ? c.planned : (Array.isArray(c.items) ? c.items : []);
-    c.planned.forEach(function(i){ i.id = i.id || uid(); i.amount = Number(i.amount)||0; i.paid = !!i.paid; });
-    c.logs = Array.isArray(c.logs) ? c.logs : [];
-    c.logs.forEach(function(i){ i.id = i.id || uid(); i.amount = Number(i.amount)||0; });
+    c.planned.forEach(function(i){
+      i.id = i.id || uid();
+      i.amount = Number(i.amount)||0;
+      i.paid = !!i.paid;
+      i.logs = Array.isArray(i.logs) ? i.logs : [];
+      i.logs.forEach(function(l){ l.id = l.id || uid(); l.amount = Number(l.amount)||0; });
+    });
+    // migrate legacy category-level logs (older version) into a "General" item
+    if(Array.isArray(c.logs) && c.logs.length){
+      var migratedLogs = c.logs.map(function(l){ return { id: l.id || uid(), name: l.name, amount: Number(l.amount)||0 }; });
+      c.planned.push({ id: uid(), name: "General", amount: 0, paid: false, logs: migratedLogs });
+    }
+    delete c.logs;
     return c;
   }
   function normalizeBoard(b){
@@ -398,13 +414,14 @@
   function autoBudget(cat){
     return (cat.planned || []).reduce(function(s,i){ return s + (Number(i.amount)||0); }, 0);
   }
-  function plannedSpent(cat){
-    return (cat.planned || []).reduce(function(s,i){ return s + (i.paid ? (Number(i.amount)||0) : 0); }, 0);
+  function itemSpent(it){
+    var paidAmt = it.paid ? (Number(it.amount)||0) : 0;
+    var logsAmt = (it.logs||[]).reduce(function(s,l){ return s + (Number(l.amount)||0); }, 0);
+    return paidAmt + logsAmt;
   }
-  function logsSpent(cat){
-    return (cat.logs || []).reduce(function(s,i){ return s + (Number(i.amount)||0); }, 0);
+  function catSpent(cat){
+    return (cat.planned || []).reduce(function(s,it){ return s + itemSpent(it); }, 0);
   }
-  function catSpent(cat){ return plannedSpent(cat) + logsSpent(cat); }
   function totalBudget(){ return cb().categories.reduce(function(s,c){ return s + (Number(c.budget)||0); }, 0); }
   function totalSpent(){ return cb().categories.reduce(function(s,c){ return s + catSpent(c); }, 0); }
 
@@ -454,17 +471,17 @@
     monthly.income = 3000;
     monthly.categories = [
       { id: uid(), name: "Groceries", budget: 200, budgetOverride: true,
-        planned: [],
-        logs: [ { id: uid(), name: "Sainsbury's", amount: 46 } ] },
+        planned: [
+          { id: uid(), name: "General", amount: 0, paid: false,
+            logs: [ { id: uid(), name: "Sainsbury's", amount: 46 } ] }
+        ] },
       { id: uid(), name: "Subscriptions", budget: 12.99, budgetOverride: false,
-        planned: [ { id: uid(), name: "Spotify", amount: 12.99, paid: true } ],
-        logs: [] },
+        planned: [ { id: uid(), name: "Spotify", amount: 12.99, paid: true, logs: [] } ] },
       { id: uid(), name: "Bills", budget: 900, budgetOverride: false,
         planned: [
-          { id: uid(), name: "Rent", amount: 750, paid: false },
-          { id: uid(), name: "Electricity", amount: 150, paid: false }
-        ],
-        logs: [] }
+          { id: uid(), name: "Rent", amount: 750, paid: false, logs: [] },
+          { id: uid(), name: "Electricity", amount: 150, paid: false, logs: [] }
+        ] }
     ];
     appState.boards = [monthly];
     appState.activeBoardId = monthly.id;
@@ -603,35 +620,36 @@
         html += '  <div class="cat-items ' + (isOpen?"open":"") + '">';
 
         if(cat.planned && cat.planned.length){
-          html += '<div class="subsection-label">To pay — tap to mark paid</div>';
           cat.planned.forEach(function(it){
-            html += '<div class="plan-row ' + (it.paid?"paid":"") + '" data-action="toggle-paid" data-cat="' + cat.id + '" data-id="' + it.id + '">';
-            html += '  <span class="check ' + (it.paid?"checked":"") + '">' + (it.paid?CHECK_SVG:'') + '</span>';
-            html += '  <span class="label">' + escapeHtml(it.name) + '</span>';
-            html += '  <span class="leader"></span>';
-            html += '  <span class="amount num">' + fmt(it.amount) + '</span>';
-            html += '</div>';
-          });
-        }
-
-        html += '<div class="subsection-label">Logged spend</div>';
-        if(cat.logs && cat.logs.length){
-          cat.logs.forEach(function(lg){
-            html += '<div class="log-row">';
-            html += '  <span class="label">' + escapeHtml(lg.name) + '</span><span class="leader"></span>';
-            html += '  <span class="amount num">' + fmt(lg.amount) + '</span>';
-            html += '  <button class="icon-btn ghost tiny" data-action="delete-log" data-cat="' + cat.id + '" data-id="' + lg.id + '" title="Remove" aria-label="Remove">' + X_SVG + '</button>';
+            var spentForItem = itemSpent(it);
+            html += '<div class="item-block">';
+            html += '  <div class="plan-row ' + (it.paid?"paid":"") + '" data-action="toggle-paid" data-cat="' + cat.id + '" data-id="' + it.id + '">';
+            html += '    <span class="check ' + (it.paid?"checked":"") + '">' + (it.paid?CHECK_SVG:'') + '</span>';
+            html += '    <span class="label">' + escapeHtml(it.name) + '</span>';
+            html += '    <span class="leader"></span>';
+            html += '    <span class="amount num">' + fmt(spentForItem) + '</span>';
+            html += '  </div>';
+            html += '  <div class="item-sub">';
+            if(it.logs && it.logs.length){
+              it.logs.forEach(function(lg){
+                html += '<div class="log-row-small">';
+                html += '  <span class="label">' + escapeHtml(lg.name) + '</span><span class="leader"></span>';
+                html += '  <span class="amount num">' + fmt(lg.amount) + '</span>';
+                html += '  <button class="icon-btn ghost tiny" data-action="delete-item-log" data-cat="' + cat.id + '" data-item="' + it.id + '" data-id="' + lg.id + '" title="Remove" aria-label="Remove">' + X_SVG + '</button>';
+                html += '</div>';
+              });
+            }
+            html += '    <div class="quick-add-row small">';
+            html += '      <input type="text" class="qa2-name" data-item="' + it.id + '" placeholder="e.g. Sainsbury\'s">';
+            html += '      <input type="number" step="0.01" inputmode="decimal" class="qa2-amount" data-item="' + it.id + '" placeholder="0.00">';
+            html += '      <button class="icon-btn" data-action="quick-add-item-log" data-cat="' + cat.id + '" data-item="' + it.id + '" title="Log spend" aria-label="Log spend">' + PLUS_SVG + '</button>';
+            html += '    </div>';
+            html += '  </div>';
             html += '</div>';
           });
         } else {
-          html += '<div class="empty-items">Nothing logged yet.</div>';
+          html += '<p class="empty-items">Add a sub-expense to this category in the Edit tab, then log spend against it here.</p>';
         }
-
-        html += '  <div class="quick-add-row">';
-        html += '    <input type="text" class="qa-name" data-cat="' + cat.id + '" placeholder="e.g. Sainsbury\'s">';
-        html += '    <input type="number" step="0.01" inputmode="decimal" class="qa-amount" data-cat="' + cat.id + '" placeholder="0.00">';
-        html += '    <button class="icon-btn" data-action="quick-add-log" data-cat="' + cat.id + '" title="Log spend" aria-label="Log spend">' + PLUS_SVG + '</button>';
-        html += '  </div>';
 
         html += '  </div>'; // .cat-items
         html += '</div>'; // .cat-card
@@ -668,13 +686,15 @@
       return;
     }
 
-    var delLog = e.target.closest('[data-action="delete-log"]');
-    if(delLog){
-      var cId2 = delLog.getAttribute("data-cat");
-      var lId = delLog.getAttribute("data-id");
+    var delItemLog = e.target.closest('[data-action="delete-item-log"]');
+    if(delItemLog){
+      var cId2 = delItemLog.getAttribute("data-cat");
+      var itId2 = delItemLog.getAttribute("data-item");
+      var lId = delItemLog.getAttribute("data-id");
       var cat2 = cb().categories.find(function(c){ return c.id === cId2; });
-      if(cat2){
-        cat2.logs = cat2.logs.filter(function(l){ return l.id !== lId; });
+      var item2 = cat2 && cat2.planned.find(function(i){ return i.id === itId2; });
+      if(item2){
+        item2.logs = item2.logs.filter(function(l){ return l.id !== lId; });
         persist(true);
         toast("Removed");
         renderOverview();
@@ -682,19 +702,21 @@
       return;
     }
 
-    var quickAdd = e.target.closest('[data-action="quick-add-log"]');
-    if(quickAdd){
-      var cId3 = quickAdd.getAttribute("data-cat");
-      var nameEl = $overview.querySelector('.qa-name[data-cat="' + cId3 + '"]');
-      var amtEl = $overview.querySelector('.qa-amount[data-cat="' + cId3 + '"]');
+    var quickAddItem = e.target.closest('[data-action="quick-add-item-log"]');
+    if(quickAddItem){
+      var cId3 = quickAddItem.getAttribute("data-cat");
+      var itId3 = quickAddItem.getAttribute("data-item");
+      var nameEl = $overview.querySelector('.qa2-name[data-item="' + itId3 + '"]');
+      var amtEl = $overview.querySelector('.qa2-amount[data-item="' + itId3 + '"]');
       var name = nameEl.value.trim();
       var amount = clampNum(amtEl.value);
       if(!name){ toast("Add a short description first"); nameEl.focus(); return; }
       if(amount <= 0){ toast("Enter an amount"); amtEl.focus(); return; }
       var cat3 = cb().categories.find(function(c){ return c.id === cId3; });
-      if(cat3){
-        cat3.logs = cat3.logs || [];
-        cat3.logs.push({ id: uid(), name: name, amount: amount });
+      var item3 = cat3 && cat3.planned.find(function(i){ return i.id === itId3; });
+      if(item3){
+        item3.logs = item3.logs || [];
+        item3.logs.push({ id: uid(), name: name, amount: amount });
         persist(true);
         toast("Logged " + fmt(amount) + " ✓");
         renderOverview();
@@ -767,7 +789,7 @@
       html += '  <div class="items-list">';
       html += '    <label class="flabel">Sub-expenses</label>';
       if(!cat.planned || cat.planned.length === 0){
-        html += '<p class="hint" style="margin-top:0;">None yet. These show as a paid/unpaid checklist on the Overview page — for things like recurring bills or subscriptions.</p>';
+        html += '<p class="hint" style="margin-top:0;">None yet. On the Overview page each one becomes a paid/unpaid checklist item — and a place to log actual spend against it, like Sainsbury\'s £12.54 under "Groceries".</p>';
       }
       (cat.planned||[]).forEach(function(it){
         html += '<div class="item-edit-row" data-item-row="' + it.id + '">';
