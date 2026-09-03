@@ -164,7 +164,7 @@
   .cat-items.open{ display:block; }
 
   .plan-row{
-    display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px dashed var(--line); cursor:pointer;
+    display:flex; align-items:center; gap:10px; padding:10px 0; border-top:1px dashed var(--line); cursor:pointer;
   }
   .plan-row:first-child{ border-top:none; }
   .check{
@@ -173,10 +173,14 @@
     transition: background .15s ease, border-color .15s ease;
   }
   .check.checked{ background:var(--teal); border-color:var(--teal-deep); }
-  .plan-row .label{ font-size:13.5px; }
-  .plan-row.paid .label{ color:var(--ink-soft); text-decoration:line-through; }
-  .plan-row.paid .amount{ color:var(--ink-soft); }
-  .plan-row .amount{ font-size:13.5px; font-weight:500; }
+  .plan-row-text{ flex:1; min-width:0; }
+  .plan-row-text .label{ font-size:13.5px; font-weight:600; }
+  .plan-row-text .sub{ font-size:11px; color:var(--ink-soft); margin-top:1px; }
+  .plan-amounts{ text-align:right; flex-shrink:0; }
+  .plan-amounts .remaining{ font-size:13.5px; font-weight:600; }
+  .plan-amounts .of{ font-size:9.5px; letter-spacing:0.04em; text-transform:uppercase; color:var(--ink-soft); margin-top:1px; }
+  .plan-row.paid .plan-row-text .label{ color:var(--ink-soft); text-decoration:line-through; }
+  .plan-row.paid .plan-amounts .remaining{ color:var(--ink-soft); }
 
   .item-block{ }
   .item-block .plan-row{ border-top:1px dashed var(--line); }
@@ -185,6 +189,17 @@
   .log-row-small{ display:flex; align-items:center; gap:6px; padding:5px 0; font-size:12.5px; }
   .log-row-small .label{ color:var(--ink); }
   .log-row-small .amount{ font-size:12.5px; font-weight:500; }
+
+  .log-expense-btn{
+    margin-top:6px; padding:7px 12px; border-radius:6px; border:1px dashed var(--line);
+    background:none; color:var(--teal-deep); font-weight:600; font-size:12px; cursor:pointer;
+    display:inline-flex; align-items:center; gap:5px;
+  }
+  .log-expense-btn:active{ background:#EFEBDD; }
+  .log-cancel-btn{
+    background:none; border:none; color:var(--ink-soft); font-size:11.5px; margin-top:6px;
+    text-decoration:underline; cursor:pointer; padding:0; display:block;
+  }
 
   .empty-items{ font-size:12px; color:var(--ink-soft); padding:6px 0 2px; font-style:italic; }
 
@@ -329,6 +344,7 @@
 
   var appState = { activeBoardId: null, boards: [] };
   var openCategoryIds = {};
+  var openLogItemIds = {};
   var currentTab = "overview";
   var boardMenuOpen = false;
 
@@ -621,13 +637,22 @@
 
         if(cat.planned && cat.planned.length){
           cat.planned.forEach(function(it){
-            var spentForItem = itemSpent(it);
+            var itBudget = Number(it.amount) || 0;
+            var itSpentVal = itemSpent(it);
+            var itRemaining = itBudget - itSpentVal;
+            var logFormOpen = !!openLogItemIds[it.id];
+
             html += '<div class="item-block">';
             html += '  <div class="plan-row ' + (it.paid?"paid":"") + '" data-action="toggle-paid" data-cat="' + cat.id + '" data-id="' + it.id + '">';
             html += '    <span class="check ' + (it.paid?"checked":"") + '">' + (it.paid?CHECK_SVG:'') + '</span>';
-            html += '    <span class="label">' + escapeHtml(it.name) + '</span>';
-            html += '    <span class="leader"></span>';
-            html += '    <span class="amount num">' + fmt(spentForItem) + '</span>';
+            html += '    <div class="plan-row-text">';
+            html += '      <div class="label">' + escapeHtml(it.name) + '</div>';
+            html += '      <div class="sub num">' + fmt(itSpentVal) + ' of ' + fmt(itBudget) + '</div>';
+            html += '    </div>';
+            html += '    <div class="plan-amounts">';
+            html += '      <div class="remaining num ' + (itRemaining<0?"warn":"good") + '">' + fmt(itRemaining) + '</div>';
+            html += '      <div class="of">remaining</div>';
+            html += '    </div>';
             html += '  </div>';
             html += '  <div class="item-sub">';
             if(it.logs && it.logs.length){
@@ -639,11 +664,16 @@
                 html += '</div>';
               });
             }
-            html += '    <div class="quick-add-row small">';
-            html += '      <input type="text" class="qa2-name" data-item="' + it.id + '" placeholder="e.g. Sainsbury\'s">';
-            html += '      <input type="number" step="0.01" inputmode="decimal" class="qa2-amount" data-item="' + it.id + '" placeholder="0.00">';
-            html += '      <button class="icon-btn" data-action="quick-add-item-log" data-cat="' + cat.id + '" data-item="' + it.id + '" title="Log spend" aria-label="Log spend">' + PLUS_SVG + '</button>';
-            html += '    </div>';
+            if(logFormOpen){
+              html += '    <div class="quick-add-row small">';
+              html += '      <input type="text" class="qa2-name" data-item="' + it.id + '" placeholder="e.g. Sainsbury\'s">';
+              html += '      <input type="number" step="0.01" inputmode="decimal" class="qa2-amount" data-item="' + it.id + '" placeholder="0.00">';
+              html += '      <button class="icon-btn" data-action="quick-add-item-log" data-cat="' + cat.id + '" data-item="' + it.id + '" title="Log spend" aria-label="Log spend">' + PLUS_SVG + '</button>';
+              html += '    </div>';
+              html += '    <button class="log-cancel-btn" data-action="cancel-log-form" data-item="' + it.id + '">Cancel</button>';
+            } else {
+              html += '    <button class="log-expense-btn" data-action="toggle-log-form" data-item="' + it.id + '">' + PLUS_SVG + ' Log expense</button>';
+            }
             html += '  </div>';
             html += '</div>';
           });
@@ -702,6 +732,24 @@
       return;
     }
 
+    var toggleLogForm = e.target.closest('[data-action="toggle-log-form"]');
+    if(toggleLogForm){
+      var openItId = toggleLogForm.getAttribute("data-item");
+      openLogItemIds[openItId] = true;
+      renderOverview();
+      var freshInput = $overview.querySelector('.qa2-name[data-item="' + openItId + '"]');
+      if(freshInput) freshInput.focus();
+      return;
+    }
+
+    var cancelLogForm = e.target.closest('[data-action="cancel-log-form"]');
+    if(cancelLogForm){
+      var closeItId = cancelLogForm.getAttribute("data-item");
+      openLogItemIds[closeItId] = false;
+      renderOverview();
+      return;
+    }
+
     var quickAddItem = e.target.closest('[data-action="quick-add-item-log"]');
     if(quickAddItem){
       var cId3 = quickAddItem.getAttribute("data-cat");
@@ -717,6 +765,7 @@
       if(item3){
         item3.logs = item3.logs || [];
         item3.logs.push({ id: uid(), name: name, amount: amount });
+        openLogItemIds[itId3] = false;
         persist(true);
         toast("Logged " + fmt(amount) + " ✓");
         renderOverview();
