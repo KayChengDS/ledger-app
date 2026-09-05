@@ -433,7 +433,7 @@
   function itemSpent(it){
     var paidAmt = it.paid ? (Number(it.amount)||0) : 0;
     var logsAmt = (it.logs||[]).reduce(function(s,l){ return s + (Number(l.amount)||0); }, 0);
-    return paidAmt + logsAmt;
+    return Math.max(paidAmt, logsAmt);
   }
   function catSpent(cat){
     return (cat.planned || []).reduce(function(s,it){ return s + itemSpent(it); }, 0);
