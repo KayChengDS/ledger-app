@@ -263,6 +263,54 @@
 
   .hint{ font-size:11.5px; color:var(--ink-soft); margin:6px 0 0; line-height:1.5; }
 
+  /* dotted leader between a label and its amount */
+  .leader{ flex:1; min-width:8px; border-bottom:1px dotted var(--line); height:1px; align-self:center; }
+
+  /* let inputs shrink inside flex rows so nothing overflows on narrow phones */
+  .item-edit-row input, .add-item-row input, .quick-add-row input{ min-width:0; }
+
+  select{
+    padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff;
+    font-family:'Inter', sans-serif; font-size:13px; color:var(--ink); max-width:100%;
+  }
+  select:focus{ outline:2px solid var(--teal); outline-offset:1px; border-color:var(--teal); }
+  .payer-line{ display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; margin-top:6px; }
+  .share-toggle{ display:inline-flex; align-items:center; gap:7px; font-size:12.5px; font-weight:500; color:var(--ink); cursor:pointer; padding:4px 0; }
+  .share-toggle input{ width:17px; height:17px; margin:0; accent-color:var(--teal); }
+  .payer-line.in-list{ padding-bottom:8px; }
+  .payer-label{ font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-soft); }
+
+  .payer-tag{
+    display:inline-block; max-width:84px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    vertical-align:middle; font-size:10px; font-weight:600; line-height:1.4; padding:0 6px; border-radius:4px; border:1px solid;
+    margin-left:6px;
+  }
+  .payer-tag.a{ color:var(--teal-deep); border-color:var(--teal); background:rgba(47,111,94,0.08); }
+  .payer-tag.b{ color:#7A4F0F; border-color:var(--gold); background:rgba(201,138,44,0.12); }
+
+  /* ratio inputs */
+  .ratio-row{ display:flex; align-items:flex-end; gap:8px; }
+  .ratio-col{ flex:1; min-width:0; }
+  .ratio-col label.flabel{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ratio-sep{ font-family:'IBM Plex Mono', monospace; font-weight:600; font-size:20px; padding-bottom:8px; color:var(--ink-soft); }
+  .ratio-col input{ text-align:center; }
+
+  /* settle-up card on Overview */
+  .settle-card{
+    background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius);
+    padding:16px 18px; box-shadow:var(--shadow); margin-top:12px;
+  }
+  .settle-headline{ font-size:14px; margin:8px 0 0; color:var(--ink); }
+  .settle-headline strong{ font-weight:600; }
+  .settle-amount{ font-family:'DM Serif Display', serif; font-size:32px; line-height:1.2; color:var(--teal-deep); margin:2px 0 6px; }
+  .settle-square{ font-family:'DM Serif Display', serif; font-size:26px; color:var(--teal-deep); margin:8px 0 4px; }
+  .settle-rows{ border-top:1px dashed var(--line); margin-top:10px; padding-top:6px; }
+  .settle-row{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; padding:5px 0; font-size:13px; }
+  .settle-row .who{ font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .settle-row .who .pct{ font-weight:400; color:var(--ink-soft); font-size:11.5px; margin-left:5px; }
+  .settle-row .figs{ font-size:12px; color:var(--ink-soft); text-align:right; flex-shrink:0; }
+  .settle-row .figs .num{ color:var(--ink); }
+
   /* ---------- Bottom tab bar ---------- */
   .tabbar{
     position:sticky; bottom:0; z-index:20;
@@ -395,8 +443,11 @@
   function cb(){
     return appState.boards.find(function(b){ return b.id === appState.activeBoardId; }) || appState.boards[0];
   }
+  function defaultSplit(){
+    return { enabled: false, nameA: "A", nameB: "B", ratioA: 1, ratioB: 1 };
+  }
   function createBoard(name){
-    return { id: uid(), name: name, income: 0, categories: [] };
+    return { id: uid(), name: name, income: 0, categories: [], split: defaultSplit() };
   }
   function normalizeCategory(c){
     c.id = c.id || uid();
@@ -407,22 +458,44 @@
       i.id = i.id || uid();
       i.amount = Number(i.amount)||0;
       i.paid = !!i.paid;
+      // payer: "A" | "B" | "" (not split)
+      i.payer = (i.payer === "A" || i.payer === "B") ? i.payer : "";
+      // shared: does the split ratio apply to this item? (default yes)
+      i.shared = i.shared !== false;
       i.logs = Array.isArray(i.logs) ? i.logs : [];
-      i.logs.forEach(function(l){ l.id = l.id || uid(); l.amount = Number(l.amount)||0; });
+      i.logs.forEach(function(l){
+        l.id = l.id || uid();
+        l.amount = Number(l.amount)||0;
+        // payer: "A" | "B" | "none" (explicitly not split) | "" (use the item's payer)
+        l.payer = (l.payer === "A" || l.payer === "B" || l.payer === "none") ? l.payer : "";
+      });
     });
     // migrate legacy category-level logs (older version) into a "General" item
     if(Array.isArray(c.logs) && c.logs.length){
-      var migratedLogs = c.logs.map(function(l){ return { id: l.id || uid(), name: l.name, amount: Number(l.amount)||0 }; });
-      c.planned.push({ id: uid(), name: "General", amount: 0, paid: false, logs: migratedLogs });
+      var migratedLogs = c.logs.map(function(l){ return { id: l.id || uid(), name: l.name, amount: Number(l.amount)||0, payer: "" }; });
+      c.planned.push({ id: uid(), name: "General", amount: 0, paid: false, payer: "", shared: true, logs: migratedLogs });
     }
     delete c.logs;
     return c;
+  }
+  function normalizeSplit(sp){
+    sp = (sp && typeof sp === "object") ? sp : {};
+    var d = defaultSplit();
+    var rA = parseFloat(sp.ratioA), rB = parseFloat(sp.ratioB);
+    return {
+      enabled: !!sp.enabled,
+      nameA: (sp.nameA && String(sp.nameA).trim()) || d.nameA,
+      nameB: (sp.nameB && String(sp.nameB).trim()) || d.nameB,
+      ratioA: (isFinite(rA) && rA >= 0) ? rA : d.ratioA,
+      ratioB: (isFinite(rB) && rB >= 0) ? rB : d.ratioB
+    };
   }
   function normalizeBoard(b){
     b.id = b.id || uid();
     b.name = (b.name && String(b.name).trim()) || "Budget";
     b.income = Number(b.income) || 0;
     b.categories = Array.isArray(b.categories) ? b.categories.map(normalizeCategory) : [];
+    b.split = normalizeSplit(b.split);
     return b;
   }
 
@@ -440,6 +513,71 @@
   }
   function totalBudget(){ return cb().categories.reduce(function(s,c){ return s + (Number(c.budget)||0); }, 0); }
   function totalSpent(){ return cb().categories.reduce(function(s,c){ return s + catSpent(c); }, 0); }
+
+  /* ---------- Split costs ---------- */
+  function personName(board, key){
+    return key === "A" ? board.split.nameA : board.split.nameB;
+  }
+  // Who paid what for one item. Logged entries go to their own payer (or the item's default);
+  // anything the "paid" tick adds beyond the logged total goes to the item's payer.
+  function itemPayerSplit(it){
+    var out = { A: 0, B: 0, none: 0 };
+    if(!it.shared) return out; // ratio isn't applied to this item
+    var logsTotal = 0;
+    (it.logs || []).forEach(function(l){
+      var amt = Number(l.amount) || 0;
+      logsTotal += amt;
+      var p = l.payer || it.payer || "";
+      if(p === "A") out.A += amt; else if(p === "B") out.B += amt; else out.none += amt;
+    });
+    var paidAmt = it.paid ? (Number(it.amount) || 0) : 0;
+    var remainder = Math.max(0, paidAmt - logsTotal);
+    if(it.payer === "A") out.A += remainder; else if(it.payer === "B") out.B += remainder; else out.none += remainder;
+    return out;
+  }
+  function lumpRemainder(it){
+    var logsTotal = (it.logs || []).reduce(function(s,l){ return s + (Number(l.amount)||0); }, 0);
+    var paidAmt = it.paid ? (Number(it.amount) || 0) : 0;
+    return Math.max(0, paidAmt - logsTotal);
+  }
+  function computeSplit(board){
+    var s = board.split;
+    var paidA = 0, paidB = 0, none = 0;
+    board.categories.forEach(function(c){
+      (c.planned || []).forEach(function(it){
+        var r = itemPayerSplit(it);
+        paidA += r.A; paidB += r.B; none += r.none;
+      });
+    });
+    var rA = Number(s.ratioA) || 0, rB = Number(s.ratioB) || 0;
+    if(rA + rB <= 0){ rA = 1; rB = 1; }
+    var tot = rA + rB;
+    var shared = paidA + paidB;
+    var shareA = shared * rA / tot;
+    var shareB = shared * rB / tot;
+    var netA = paidA - shareA; // positive = A paid more than their share, so B owes A
+    var res = {
+      paidA: paidA, paidB: paidB, none: none, shared: shared,
+      shareA: shareA, shareB: shareB,
+      pctA: rA / tot * 100, pctB: rB / tot * 100,
+      square: false, from: "", to: "", amount: 0
+    };
+    if(Math.abs(netA) < 0.005){ res.square = true; }
+    else if(netA > 0){ res.from = "B"; res.to = "A"; res.amount = netA; }
+    else { res.from = "A"; res.to = "B"; res.amount = -netA; }
+    return res;
+  }
+  function fmtPct(n){ return (Math.round(n * 10) / 10) + "%"; }
+  function payerOptionsHtml(board, selected, noneValue){
+    var s = board.split;
+    return '<option value="' + noneValue + '"' + (selected === noneValue ? ' selected' : '') + '>Who paid?</option>'
+         + '<option value="A"' + (selected === "A" ? ' selected' : '') + '>' + escapeHtml(s.nameA) + '</option>'
+         + '<option value="B"' + (selected === "B" ? ' selected' : '') + '>' + escapeHtml(s.nameB) + '</option>';
+  }
+  function payerTagHtml(board, key){
+    if(key !== "A" && key !== "B") return "";
+    return '<span class="payer-tag ' + key.toLowerCase() + '">' + escapeHtml(personName(board, key)) + '</span>';
+  }
 
   async function persist(silent){
     try{
@@ -602,6 +740,28 @@
     html += '  <div class="bar-track"><div class="bar-fill ' + (over?"over":"") + '" style="width:' + pct + '%"></div></div>';
     html += '</div>';
 
+    if(board.split.enabled){
+      var sp = computeSplit(board);
+      var nA = escapeHtml(board.split.nameA), nB = escapeHtml(board.split.nameB);
+      html += '<div class="settle-card">';
+      html += '  <div class="hero-title" style="margin-bottom:0;">Settle up</div>';
+      if(sp.square){
+        html += '  <div class="settle-square">All square</div>';
+        html += '  <div class="hero-caption">' + (sp.shared > 0 ? 'Nobody owes anything.' : 'Pick who paid on each item and the split shows up here.') + '</div>';
+      } else {
+        html += '  <div class="settle-headline"><strong>' + escapeHtml(personName(board, sp.from)) + '</strong> pays <strong>' + escapeHtml(personName(board, sp.to)) + '</strong></div>';
+        html += '  <div class="settle-amount num">' + fmt(sp.amount) + '</div>';
+      }
+      html += '  <div class="settle-rows">';
+      html += '    <div class="settle-row"><span class="who">' + nA + '<span class="pct">' + fmtPct(sp.pctA) + '</span></span><span class="figs">paid <span class="num">' + fmt(sp.paidA) + '</span> · share <span class="num">' + fmt(sp.shareA) + '</span></span></div>';
+      html += '    <div class="settle-row"><span class="who">' + nB + '<span class="pct">' + fmtPct(sp.pctB) + '</span></span><span class="figs">paid <span class="num">' + fmt(sp.paidB) + '</span> · share <span class="num">' + fmt(sp.shareB) + '</span></span></div>';
+      html += '  </div>';
+      if(sp.none > 0.004){
+        html += '  <p class="hint">' + fmt(sp.none) + ' of split spend has no payer set, so it\'s left out for now.</p>';
+      }
+      html += '</div>';
+    }
+
     html += '<div class="section-label">Categories</div>';
 
     if(board.categories.length === 0){
@@ -647,7 +807,7 @@
             html += '    <span class="check ' + (it.paid?"checked":"") + '">' + (it.paid?CHECK_SVG:'') + '</span>';
             html += '    <div class="plan-row-text">';
             html += '      <div class="label">' + escapeHtml(it.name) + '</div>';
-            html += '      <div class="sub num">' + fmt(itSpentVal) + ' of ' + fmt(itBudget) + '</div>';
+            html += '      <div class="sub num">' + fmt(itSpentVal) + ' of ' + fmt(itBudget) + (board.split.enabled && it.shared && lumpRemainder(it) > 0 ? payerTagHtml(board, it.payer) : '') + '</div>';
             html += '    </div>';
             html += '    <div class="plan-amounts">';
             html += '      <div class="remaining num ' + (itRemaining<0?"warn":"good") + '">' + fmt(itRemaining) + '</div>';
@@ -658,7 +818,7 @@
             if(it.logs && it.logs.length){
               it.logs.forEach(function(lg){
                 html += '<div class="log-row-small">';
-                html += '  <span class="label">' + escapeHtml(lg.name) + '</span><span class="leader"></span>';
+                html += '  <span class="label">' + escapeHtml(lg.name) + (board.split.enabled && it.shared ? payerTagHtml(board, lg.payer || it.payer || "") : '') + '</span><span class="leader"></span>';
                 html += '  <span class="amount num">' + fmt(lg.amount) + '</span>';
                 html += '  <button class="icon-btn ghost tiny" data-action="delete-item-log" data-cat="' + cat.id + '" data-item="' + it.id + '" data-id="' + lg.id + '" title="Remove" aria-label="Remove">' + X_SVG + '</button>';
                 html += '</div>';
@@ -670,6 +830,9 @@
               html += '      <input type="number" step="0.01" inputmode="decimal" class="qa2-amount" data-item="' + it.id + '" placeholder="0.00">';
               html += '      <button class="icon-btn" data-action="quick-add-item-log" data-cat="' + cat.id + '" data-item="' + it.id + '" title="Log spend" aria-label="Log spend">' + PLUS_SVG + '</button>';
               html += '    </div>';
+              if(board.split.enabled && it.shared){
+                html += '    <div class="payer-line"><span class="payer-label">Paid by</span><select class="qa2-payer" data-item="' + it.id + '">' + payerOptionsHtml(board, it.payer || "none", "none") + '</select></div>';
+              }
               html += '    <button class="log-cancel-btn" data-action="cancel-log-form" data-item="' + it.id + '">Cancel</button>';
             } else {
               html += '    <button class="log-expense-btn" data-action="toggle-log-form" data-item="' + it.id + '">' + PLUS_SVG + ' Log expense</button>';
@@ -764,7 +927,9 @@
       var item3 = cat3 && cat3.planned.find(function(i){ return i.id === itId3; });
       if(item3){
         item3.logs = item3.logs || [];
-        item3.logs.push({ id: uid(), name: name, amount: amount });
+        var payerEl = $overview.querySelector('.qa2-payer[data-item="' + itId3 + '"]');
+        var logPayer = payerEl ? payerEl.value : "";
+        item3.logs.push({ id: uid(), name: name, amount: amount, payer: logPayer });
         openLogItemIds[itId3] = false;
         persist(true);
         toast("Logged " + fmt(amount) + " ✓");
@@ -779,6 +944,34 @@
   function renderEdit(){
     var board = cb();
     var html = "";
+
+    html += '<div class="section-label">Split costs</div>';
+    html += '<div class="edit-card">';
+    if(!board.split.enabled){
+      html += '  <p class="hint" style="margin:0 0 12px;">Sharing this budget with someone? Set a ratio, pick which sub-expenses it applies to, say who paid, and Ledger works out who owes who.</p>';
+      html += '  <button class="btn secondary block" id="split-enable">Turn on splitting</button>';
+    } else {
+      var spE = board.split;
+      var prevE = computeSplit(board);
+      html += '  <div class="edit-card-head" style="margin-bottom:10px;">';
+      html += '    <div class="cat-name">Two people, one ratio</div>';
+      html += '    <button class="btn danger small" id="split-disable">Turn off</button>';
+      html += '  </div>';
+      html += '  <div class="row-inline" style="margin-bottom:12px;">';
+      html += '    <div><label class="flabel">First person</label><input type="text" id="split-name-a" maxlength="20" value="' + escapeHtml(spE.nameA) + '"></div>';
+      html += '    <div><label class="flabel">Second person</label><input type="text" id="split-name-b" maxlength="20" value="' + escapeHtml(spE.nameB) + '"></div>';
+      html += '  </div>';
+      html += '  <label class="flabel">Ratio</label>';
+      html += '  <div class="ratio-row">';
+      html += '    <div class="ratio-col"><label class="flabel" style="margin-bottom:5px;">' + escapeHtml(spE.nameA) + '</label><input type="number" step="any" min="0" inputmode="decimal" id="split-ratio-a" value="' + spE.ratioA + '"></div>';
+      html += '    <div class="ratio-sep">:</div>';
+      html += '    <div class="ratio-col"><label class="flabel" style="margin-bottom:5px;">' + escapeHtml(spE.nameB) + '</label><input type="number" step="any" min="0" inputmode="decimal" id="split-ratio-b" value="' + spE.ratioB + '"></div>';
+      html += '  </div>';
+      html += '  <p class="hint">' + escapeHtml(spE.nameA) + ' covers ' + fmtPct(prevE.pctA) + ' and ' + escapeHtml(spE.nameB) + ' covers ' + fmtPct(prevE.pctB) + ' of the shared spend. Tick <em>Split by ratio</em> on the sub-expenses you share, and say who paid.</p>';
+      html += '  <button class="btn block" style="margin-top:12px;" id="split-save">Save split</button>';
+      html += '  <p class="hint" style="margin-top:10px;">Right now: ' + (prevE.square ? 'all square.' : '<strong>' + escapeHtml(personName(board, prevE.from)) + '</strong> pays <strong>' + escapeHtml(personName(board, prevE.to)) + '</strong> <span class="num">' + fmt(prevE.amount) + '</span>.') + '</p>';
+    }
+    html += '</div>';
 
     html += '<div class="section-label">This budget</div>';
     html += '<div class="edit-card">';
@@ -847,6 +1040,14 @@
         html += '  <button class="icon-btn" data-action="save-item" data-cat="' + cat.id + '" data-id="' + it.id + '" title="Save item" aria-label="Save item">' + CHECK_SVG + '</button>';
         html += '  <button class="icon-btn" data-action="delete-item" data-cat="' + cat.id + '" data-id="' + it.id + '" title="Delete item" aria-label="Delete item">' + X_SVG + '</button>';
         html += '</div>';
+        if(board.split.enabled){
+          html += '<div class="payer-line in-list">';
+          html += '  <label class="share-toggle"><input type="checkbox" class="item-shared-input" data-id="' + it.id + '"' + (it.shared ? ' checked' : '') + '> Split by ratio</label>';
+          if(it.shared){
+            html += '  <span class="payer-label">Paid by</span><select class="item-payer-input" data-id="' + it.id + '">' + payerOptionsHtml(board, it.payer || "", "") + '</select>';
+          }
+          html += '</div>';
+        }
       });
       html += '  </div>';
 
@@ -855,11 +1056,60 @@
       html += '    <input type="number" step="0.01" inputmode="decimal" class="new-item-amount" data-cat="' + cat.id + '" placeholder="0.00">';
       html += '    <button class="icon-btn" data-action="add-item" data-cat="' + cat.id + '" title="Add sub-expense" aria-label="Add sub-expense">' + PLUS_SVG + '</button>';
       html += '  </div>';
+      if(board.split.enabled){
+        html += '  <div class="payer-line">';
+        html += '    <label class="share-toggle"><input type="checkbox" class="new-item-shared" data-cat="' + cat.id + '" checked> Split by ratio</label>';
+        html += '    <span class="payer-label">Paid by</span><select class="new-item-payer" data-cat="' + cat.id + '">' + payerOptionsHtml(board, "", "") + '</select>';
+        html += '  </div>';
+      }
 
       html += '</div>';
     });
 
     $edit.innerHTML = html;
+
+    var splitEnableBtn = document.getElementById("split-enable");
+    if(splitEnableBtn){
+      splitEnableBtn.addEventListener("click", function(){
+        cb().split.enabled = true;
+        persist(true);
+        toast("Splitting turned on ✓");
+        renderEdit();
+        renderOverview();
+      });
+    }
+
+    var splitDisableBtn = document.getElementById("split-disable");
+    if(splitDisableBtn){
+      splitDisableBtn.addEventListener("click", function(){
+        cb().split.enabled = false;
+        persist(true);
+        toast("Splitting turned off (your settings are kept)");
+        renderEdit();
+        renderOverview();
+      });
+    }
+
+    var splitSaveBtn = document.getElementById("split-save");
+    if(splitSaveBtn){
+      splitSaveBtn.addEventListener("click", function(){
+        var nameA = document.getElementById("split-name-a").value.trim() || "A";
+        var nameB = document.getElementById("split-name-b").value.trim() || "B";
+        if(nameA.toLowerCase() === nameB.toLowerCase()){ toast("Give each person a different name"); return; }
+        var rA = parseFloat(document.getElementById("split-ratio-a").value);
+        var rB = parseFloat(document.getElementById("split-ratio-b").value);
+        if(isNaN(rA) || isNaN(rB) || rA < 0 || rB < 0 || (rA + rB) <= 0){
+          toast("Enter a ratio, like 6 and 4");
+          return;
+        }
+        var sp = cb().split;
+        sp.nameA = nameA; sp.nameB = nameB; sp.ratioA = rA; sp.ratioB = rB;
+        persist(true);
+        toast("Split saved ✓");
+        renderEdit();
+        renderOverview();
+      });
+    }
 
     document.getElementById("save-board-name").addEventListener("click", function(){
       var nameEl = document.getElementById("board-name-input");
@@ -990,7 +1240,9 @@
       var cat = cb().categories.find(function(c){ return c.id === cId; });
       if(cat){
         cat.planned = cat.planned || [];
-        cat.planned.push({ id: uid(), name: name, amount: amount, paid: false });
+        var newPayerEl = $edit.querySelector('.new-item-payer[data-cat="' + cId + '"]');
+        var newSharedEl = $edit.querySelector('.new-item-shared[data-cat="' + cId + '"]');
+        cat.planned.push({ id: uid(), name: name, amount: amount, paid: false, payer: newPayerEl ? newPayerEl.value : "", shared: newSharedEl ? newSharedEl.checked : true, logs: [] });
         recalcAutoBudget(cat);
         persist(true);
         toast("Sub-expense added ✓");
@@ -1007,6 +1259,10 @@
       var cat2 = cb().categories.find(function(c){ return c.id === cId2; });
       var item = cat2 && cat2.planned.find(function(i){ return i.id === iId; });
       if(item){
+        var itemPayerEl = $edit.querySelector('.item-payer-input[data-id="' + iId + '"]');
+        if(itemPayerEl) item.payer = itemPayerEl.value;
+        var itemSharedEl = $edit.querySelector('.item-shared-input[data-id="' + iId + '"]');
+        if(itemSharedEl) item.shared = itemSharedEl.checked;
         item.name = nameEl.value.trim() || item.name;
         item.amount = clampNum(amtEl.value);
         recalcAutoBudget(cat2);
@@ -1030,6 +1286,14 @@
         renderOverview();
       }
     }
+  });
+
+  // Changing "Paid by" on an existing sub-expense saves that row straight away
+  $edit.addEventListener("change", function(e){
+    var sel = e.target.closest(".item-payer-input, .item-shared-input");
+    if(!sel) return;
+    var saveBtn = $edit.querySelector('[data-action="save-item"][data-id="' + sel.getAttribute("data-id") + '"]');
+    if(saveBtn) saveBtn.click();
   });
 
   /* ---------------- Tabs ---------------- */
