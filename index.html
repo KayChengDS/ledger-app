@@ -280,13 +280,6 @@
   .payer-line.in-list{ padding-bottom:8px; }
   .payer-label{ font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-soft); }
 
-  .payer-tag{
-    display:inline-block; max-width:84px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-    vertical-align:middle; font-size:10px; font-weight:600; line-height:1.4; padding:0 6px; border-radius:4px; border:1px solid;
-    margin-left:6px;
-  }
-  .payer-tag.a{ color:var(--teal-deep); border-color:var(--teal); background:rgba(47,111,94,0.08); }
-  .payer-tag.b{ color:#7A4F0F; border-color:var(--gold); background:rgba(201,138,44,0.12); }
 
   /* ratio inputs */
   .ratio-row{ display:flex; align-items:flex-end; gap:8px; }
@@ -294,6 +287,14 @@
   .ratio-col label.flabel{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .ratio-sep{ font-family:'IBM Plex Mono', monospace; font-weight:600; font-size:20px; padding-bottom:8px; color:var(--ink-soft); }
   .ratio-col input{ text-align:center; }
+
+  .split-tag{
+    display:inline-block; margin-left:6px; padding:0 6px; border-radius:4px; font-family:'Inter', sans-serif;
+    font-size:10px; font-weight:600; line-height:1.5; vertical-align:middle; letter-spacing:0.02em;
+    color:var(--teal-deep); border:1px solid var(--teal); background:rgba(47,111,94,0.08);
+  }
+  .log-entry{ margin-bottom:2px; }
+  .log-note{ font-size:11px; color:var(--ink-soft); margin:-3px 0 5px; line-height:1.4; }
 
   /* settle-up card on Overview */
   .settle-card{
@@ -444,12 +445,15 @@
     return appState.boards.find(function(b){ return b.id === appState.activeBoardId; }) || appState.boards[0];
   }
   function defaultSplit(){
-    return { enabled: false, nameA: "A", nameB: "B", ratioA: 1, ratioB: 1 };
+    // You are always the first person (A). nameB is the other person.
+    return { enabled: false, everEnabled: false, nameA: "Me", nameB: "Partner", ratioA: 1, ratioB: 1 };
   }
   function createBoard(name){
     return { id: uid(), name: name, income: 0, categories: [], split: defaultSplit() };
   }
-  function normalizeCategory(c){
+  function validMode(m){ return m === "done" || m === "me" || m === "other"; }
+  // defaultShared: what to assume for items saved before the "Split by ratio" tick existed
+  function normalizeCategory(c, defaultShared){
     c.id = c.id || uid();
     c.budget = Number(c.budget) || 0;
     c.budgetOverride = !!c.budgetOverride;
@@ -458,22 +462,24 @@
       i.id = i.id || uid();
       i.amount = Number(i.amount)||0;
       i.paid = !!i.paid;
-      // payer: "A" | "B" | "" (not split)
-      i.payer = (i.payer === "A" || i.payer === "B") ? i.payer : "";
-      // shared: does the split ratio apply to this item? (default yes)
-      i.shared = i.shared !== false;
+      // mode: "done" = already split when paid | "me" = I paid it all, not split yet | "other" = they paid it all, not split yet
+      i.mode = validMode(i.mode) ? i.mode : (i.payer === "B" ? "other" : "me");
+      delete i.payer;
+      // shared: does the split ratio apply to this item?
+      i.shared = (i.shared === true || i.shared === false) ? i.shared : !!defaultShared;
       i.logs = Array.isArray(i.logs) ? i.logs : [];
       i.logs.forEach(function(l){
         l.id = l.id || uid();
         l.amount = Number(l.amount)||0;
-        // payer: "A" | "B" | "none" (explicitly not split) | "" (use the item's payer)
-        l.payer = (l.payer === "A" || l.payer === "B" || l.payer === "none") ? l.payer : "";
+        // "" = use the item's mode
+        l.mode = validMode(l.mode) ? l.mode : (l.payer === "A" ? "me" : (l.payer === "B" ? "other" : ""));
+        delete l.payer;
       });
     });
     // migrate legacy category-level logs (older version) into a "General" item
     if(Array.isArray(c.logs) && c.logs.length){
-      var migratedLogs = c.logs.map(function(l){ return { id: l.id || uid(), name: l.name, amount: Number(l.amount)||0, payer: "" }; });
-      c.planned.push({ id: uid(), name: "General", amount: 0, paid: false, payer: "", shared: true, logs: migratedLogs });
+      var migratedLogs = c.logs.map(function(l){ return { id: l.id || uid(), name: l.name, amount: Number(l.amount)||0, mode: "" }; });
+      c.planned.push({ id: uid(), name: "General", amount: 0, paid: false, mode: "me", shared: !!defaultShared, logs: migratedLogs });
     }
     delete c.logs;
     return c;
@@ -484,6 +490,7 @@
     var rA = parseFloat(sp.ratioA), rB = parseFloat(sp.ratioB);
     return {
       enabled: !!sp.enabled,
+      everEnabled: !!(sp.everEnabled || sp.enabled),
       nameA: (sp.nameA && String(sp.nameA).trim()) || d.nameA,
       nameB: (sp.nameB && String(sp.nameB).trim()) || d.nameB,
       ratioA: (isFinite(rA) && rA >= 0) ? rA : d.ratioA,
@@ -494,89 +501,101 @@
     b.id = b.id || uid();
     b.name = (b.name && String(b.name).trim()) || "Budget";
     b.income = Number(b.income) || 0;
-    b.categories = Array.isArray(b.categories) ? b.categories.map(normalizeCategory) : [];
     b.split = normalizeSplit(b.split);
+    b.categories = Array.isArray(b.categories)
+      ? b.categories.map(function(c){ return normalizeCategory(c, b.split.enabled); }) : [];
+    // automatic budgets always follow the sub-expenses (and, when splitting, your share of them)
+    b.categories.forEach(function(c){ if(!c.budgetOverride) c.budget = autoBudgetFor(c, b); });
     return b;
   }
 
-  /* ---------- Derived numbers ---------- */
-  function autoBudget(cat){
-    return (cat.planned || []).reduce(function(s,i){ return s + (Number(i.amount)||0); }, 0);
+  /* ---------- Split maths ---------- */
+  function r2(n){ return Math.round(n * 100) / 100; }
+  function myFracOf(board){
+    var s = board.split, rA = Number(s.ratioA) || 0, rB = Number(s.ratioB) || 0;
+    if(rA + rB <= 0){ rA = 1; rB = 1; }
+    return rA / (rA + rB);
   }
-  function itemSpent(it){
-    var paidAmt = it.paid ? (Number(it.amount)||0) : 0;
-    var logsAmt = (it.logs||[]).reduce(function(s,l){ return s + (Number(l.amount)||0); }, 0);
-    return Math.max(paidAmt, logsAmt);
-  }
-  function catSpent(cat){
-    return (cat.planned || []).reduce(function(s,it){ return s + itemSpent(it); }, 0);
-  }
-  function totalBudget(){ return cb().categories.reduce(function(s,c){ return s + (Number(c.budget)||0); }, 0); }
-  function totalSpent(){ return cb().categories.reduce(function(s,c){ return s + catSpent(c); }, 0); }
-
-  /* ---------- Split costs ---------- */
-  function personName(board, key){
-    return key === "A" ? board.split.nameA : board.split.nameB;
-  }
-  // Who paid what for one item. Logged entries go to their own payer (or the item's default);
-  // anything the "paid" tick adds beyond the logged total goes to the item's payer.
-  function itemPayerSplit(it){
-    var out = { A: 0, B: 0, none: 0 };
-    if(!it.shared) return out; // ratio isn't applied to this item
-    var logsTotal = 0;
+  // The part of an item's cost that counts as YOURS: all of it, unless splitting is on and the item is shared.
+  function fracFor(board, it){ return (board.split.enabled && it.shared) ? myFracOf(board) : 1; }
+  // Everything spent on an item, as full bills: each logged entry, plus whatever the "paid" tick adds beyond them.
+  function itemChunks(it){
+    var out = [], logsTotal = 0;
     (it.logs || []).forEach(function(l){
-      var amt = Number(l.amount) || 0;
-      logsTotal += amt;
-      var p = l.payer || it.payer || "";
-      if(p === "A") out.A += amt; else if(p === "B") out.B += amt; else out.none += amt;
+      var a = Number(l.amount) || 0;
+      logsTotal += a;
+      out.push({ amount: a, mode: l.mode || it.mode || "me", lump: false });
     });
     var paidAmt = it.paid ? (Number(it.amount) || 0) : 0;
-    var remainder = Math.max(0, paidAmt - logsTotal);
-    if(it.payer === "A") out.A += remainder; else if(it.payer === "B") out.B += remainder; else out.none += remainder;
+    var rem = Math.max(0, paidAmt - logsTotal);
+    if(rem > 0) out.push({ amount: rem, mode: it.mode || "me", lump: true });
     return out;
   }
-  function lumpRemainder(it){
-    var logsTotal = (it.logs || []).reduce(function(s,l){ return s + (Number(l.amount)||0); }, 0);
-    var paidAmt = it.paid ? (Number(it.amount) || 0) : 0;
-    return Math.max(0, paidAmt - logsTotal);
+  function itemFullSpent(it){
+    return itemChunks(it).reduce(function(s,c){ return s + c.amount; }, 0);
   }
+  function lumpRemainder(it){
+    var c = itemChunks(it).filter(function(x){ return x.lump; })[0];
+    return c ? c.amount : 0;
+  }
+  function trimNum(n){ return String(parseFloat((Number(n) || 0).toFixed(2))); }
+  function ratioText(board){ return trimNum(board.split.ratioA) + ":" + trimNum(board.split.ratioB); }
+  function fmtPct(n){ return (Math.round(n * 10) / 10) + "%"; }
+
+  /* ---------- Derived numbers (always YOUR portion when splitting) ---------- */
+  function autoBudgetFor(cat, board){
+    return r2((cat.planned || []).reduce(function(s,i){ return s + (Number(i.amount)||0) * fracFor(board, i); }, 0));
+  }
+  function autoBudget(cat){ return autoBudgetFor(cat, cb()); }
+  // item figures stay exact; they're rounded to pence only when totalled or shown, so 3 × 2/3 of £40 still adds up
+  function itemSpent(it){ return itemFullSpent(it) * fracFor(cb(), it); }
+  function itemBudgetMine(it){ return (Number(it.amount) || 0) * fracFor(cb(), it); }
+  function catSpent(cat){
+    return r2((cat.planned || []).reduce(function(s,it){ return s + itemSpent(it); }, 0));
+  }
+  function totalBudget(){ return cb().categories.reduce(function(s,c){ return s + (Number(c.budget)||0); }, 0); }
+  function totalSpent(){ return r2(cb().categories.reduce(function(s,c){ return s + catSpent(c); }, 0)); }
+  function recalcAllBudgets(board){
+    board.categories.forEach(function(c){ if(!c.budgetOverride) c.budget = autoBudgetFor(c, board); });
+  }
+
+  /* ---------- Settling up ---------- */
   function computeSplit(board){
-    var s = board.split;
-    var paidA = 0, paidB = 0, none = 0;
+    var f = myFracOf(board);
+    var shared = 0, done = 0, owedToMe = 0, iOwe = 0;
     board.categories.forEach(function(c){
       (c.planned || []).forEach(function(it){
-        var r = itemPayerSplit(it);
-        paidA += r.A; paidB += r.B; none += r.none;
+        if(!it.shared) return;
+        itemChunks(it).forEach(function(ch){
+          shared += ch.amount;
+          if(ch.mode === "done") done += ch.amount;
+          else if(ch.mode === "other") iOwe += ch.amount * f;          // they paid it all: I owe my share
+          else owedToMe += ch.amount * (1 - f);                          // I paid it all: they owe their share
+        });
       });
     });
-    var rA = Number(s.ratioA) || 0, rB = Number(s.ratioB) || 0;
-    if(rA + rB <= 0){ rA = 1; rB = 1; }
-    var tot = rA + rB;
-    var shared = paidA + paidB;
-    var shareA = shared * rA / tot;
-    var shareB = shared * rB / tot;
-    var netA = paidA - shareA; // positive = A paid more than their share, so B owes A
-    var res = {
-      paidA: paidA, paidB: paidB, none: none, shared: shared,
-      shareA: shareA, shareB: shareB,
-      pctA: rA / tot * 100, pctB: rB / tot * 100,
-      square: false, from: "", to: "", amount: 0
+    var net = owedToMe - iOwe;
+    return {
+      shared: shared, done: done,
+      myShare: shared * f, otherShare: shared * (1 - f),
+      pctMe: f * 100, pctOther: (1 - f) * 100,
+      owedToMe: owedToMe, iOwe: iOwe, net: net,
+      square: Math.abs(net) < 0.005
     };
-    if(Math.abs(netA) < 0.005){ res.square = true; }
-    else if(netA > 0){ res.from = "B"; res.to = "A"; res.amount = netA; }
-    else { res.from = "A"; res.to = "B"; res.amount = -netA; }
-    return res;
   }
-  function fmtPct(n){ return (Math.round(n * 10) / 10) + "%"; }
-  function payerOptionsHtml(board, selected, noneValue){
-    var s = board.split;
-    return '<option value="' + noneValue + '"' + (selected === noneValue ? ' selected' : '') + '>Who paid?</option>'
-         + '<option value="A"' + (selected === "A" ? ' selected' : '') + '>' + escapeHtml(s.nameA) + '</option>'
-         + '<option value="B"' + (selected === "B" ? ' selected' : '') + '>' + escapeHtml(s.nameB) + '</option>';
+  function modeOptionsHtml(board, selected){
+    var other = escapeHtml(board.split.nameB);
+    return '<option value="done"' + (selected === "done" ? ' selected' : '') + '>Already split</option>'
+         + '<option value="me"' + (selected === "me" ? ' selected' : '') + '>I paid · not split yet</option>'
+         + '<option value="other"' + (selected === "other" ? ' selected' : '') + '>' + other + ' paid · not split yet</option>';
   }
-  function payerTagHtml(board, key){
-    if(key !== "A" && key !== "B") return "";
-    return '<span class="payer-tag ' + key.toLowerCase() + '">' + escapeHtml(personName(board, key)) + '</span>';
+  // one-line explanation under a logged bill: your share + who owes what
+  function chunkNote(board, amount, mode){
+    var f = myFracOf(board), mine = amount * f, theirs = amount * (1 - f);
+    var other = escapeHtml(board.split.nameB);
+    if(mode === "done") return 'Already split · your share ' + fmt(mine);
+    if(mode === "other") return other + ' paid · your share ' + fmt(mine) + ', which you owe';
+    return 'You paid · your share ' + fmt(mine) + ' · ' + other + ' owes you ' + fmt(theirs);
   }
 
   async function persist(silent){
@@ -727,7 +746,7 @@
     var board = cb();
     var income = board.income || 0;
     var spent = totalSpent();
-    var remaining = income - spent;
+    var remaining = r2(income - spent);
     var pct = income > 0 ? Math.min(100, (spent/income)*100) : (spent > 0 ? 100 : 0);
     var over = spent > income;
 
@@ -742,22 +761,26 @@
 
     if(board.split.enabled){
       var sp = computeSplit(board);
-      var nA = escapeHtml(board.split.nameA), nB = escapeHtml(board.split.nameB);
+      var nB = escapeHtml(board.split.nameB);
       html += '<div class="settle-card">';
-      html += '  <div class="hero-title" style="margin-bottom:0;">Settle up</div>';
+      html += '  <div class="hero-title" style="margin-bottom:0;">Split · ' + ratioText(board) + '</div>';
       if(sp.square){
-        html += '  <div class="settle-square">All square</div>';
-        html += '  <div class="hero-caption">' + (sp.shared > 0 ? 'Nobody owes anything.' : 'Pick who paid on each item and the split shows up here.') + '</div>';
+        html += '  <div class="settle-square">All settled</div>';
+        html += '  <div class="hero-caption">' + (sp.shared > 0 ? 'Nothing owed either way.' : 'Tick “Split by ratio” on a sub-expense in Edit and it shows up here.') + '</div>';
+      } else if(sp.net > 0){
+        html += '  <div class="settle-headline"><strong>' + nB + '</strong> owes you</div>';
+        html += '  <div class="settle-amount num">' + fmt(sp.net) + '</div>';
       } else {
-        html += '  <div class="settle-headline"><strong>' + escapeHtml(personName(board, sp.from)) + '</strong> pays <strong>' + escapeHtml(personName(board, sp.to)) + '</strong></div>';
-        html += '  <div class="settle-amount num">' + fmt(sp.amount) + '</div>';
+        html += '  <div class="settle-headline">You owe <strong>' + nB + '</strong></div>';
+        html += '  <div class="settle-amount num">' + fmt(-sp.net) + '</div>';
       }
       html += '  <div class="settle-rows">';
-      html += '    <div class="settle-row"><span class="who">' + nA + '<span class="pct">' + fmtPct(sp.pctA) + '</span></span><span class="figs">paid <span class="num">' + fmt(sp.paidA) + '</span> · share <span class="num">' + fmt(sp.shareA) + '</span></span></div>';
-      html += '    <div class="settle-row"><span class="who">' + nB + '<span class="pct">' + fmtPct(sp.pctB) + '</span></span><span class="figs">paid <span class="num">' + fmt(sp.paidB) + '</span> · share <span class="num">' + fmt(sp.shareB) + '</span></span></div>';
+      html += '    <div class="settle-row"><span class="who">Shared bills</span><span class="figs"><span class="num">' + fmt(sp.shared) + '</span></span></div>';
+      html += '    <div class="settle-row"><span class="who">Your share<span class="pct">' + fmtPct(sp.pctMe) + '</span></span><span class="figs"><span class="num">' + fmt(sp.myShare) + '</span></span></div>';
+      html += '    <div class="settle-row"><span class="who">' + nB + '’s share<span class="pct">' + fmtPct(sp.pctOther) + '</span></span><span class="figs"><span class="num">' + fmt(sp.otherShare) + '</span></span></div>';
       html += '  </div>';
-      if(sp.none > 0.004){
-        html += '  <p class="hint">' + fmt(sp.none) + ' of split spend has no payer set, so it\'s left out for now.</p>';
+      if(sp.done > 0.004){
+        html += '  <p class="hint">' + fmt(sp.done) + ' of the shared bills was already split when paid, so none of that is owed.</p>';
       }
       html += '</div>';
     }
@@ -774,7 +797,7 @@
       board.categories.forEach(function(cat){
         var cSpent = catSpent(cat);
         var cBudget = Number(cat.budget) || 0;
-        var cRemaining = cBudget - cSpent;
+        var cRemaining = r2(cBudget - cSpent);
         var cPct = cBudget > 0 ? Math.min(100, (cSpent/cBudget)*100) : (cSpent>0?100:0);
         var cOver = cSpent > cBudget && cBudget > 0;
         var isOpen = !!openCategoryIds[cat.id];
@@ -797,9 +820,9 @@
 
         if(cat.planned && cat.planned.length){
           cat.planned.forEach(function(it){
-            var itBudget = Number(it.amount) || 0;
-            var itSpentVal = itemSpent(it);
-            var itRemaining = itBudget - itSpentVal;
+            var itBudget = r2(itemBudgetMine(it));
+            var itSpentVal = r2(itemSpent(it));
+            var itRemaining = r2(itBudget - itSpentVal);
             var logFormOpen = !!openLogItemIds[it.id];
 
             html += '<div class="item-block">';
@@ -807,7 +830,7 @@
             html += '    <span class="check ' + (it.paid?"checked":"") + '">' + (it.paid?CHECK_SVG:'') + '</span>';
             html += '    <div class="plan-row-text">';
             html += '      <div class="label">' + escapeHtml(it.name) + '</div>';
-            html += '      <div class="sub num">' + fmt(itSpentVal) + ' of ' + fmt(itBudget) + (board.split.enabled && it.shared && lumpRemainder(it) > 0 ? payerTagHtml(board, it.payer) : '') + '</div>';
+            html += '      <div class="sub num">' + fmt(itSpentVal) + ' of ' + fmt(itBudget) + (board.split.enabled && it.shared ? '<span class="split-tag">Split ' + ratioText(board) + '</span>' : '') + '</div>';
             html += '    </div>';
             html += '    <div class="plan-amounts">';
             html += '      <div class="remaining num ' + (itRemaining<0?"warn":"good") + '">' + fmt(itRemaining) + '</div>';
@@ -815,14 +838,23 @@
             html += '    </div>';
             html += '  </div>';
             html += '  <div class="item-sub">';
+            var isSplit = board.split.enabled && it.shared;
             if(it.logs && it.logs.length){
               it.logs.forEach(function(lg){
+                html += '<div class="log-entry">';
                 html += '<div class="log-row-small">';
-                html += '  <span class="label">' + escapeHtml(lg.name) + (board.split.enabled && it.shared ? payerTagHtml(board, lg.payer || it.payer || "") : '') + '</span><span class="leader"></span>';
+                html += '  <span class="label">' + escapeHtml(lg.name) + '</span><span class="leader"></span>';
                 html += '  <span class="amount num">' + fmt(lg.amount) + '</span>';
                 html += '  <button class="icon-btn ghost tiny" data-action="delete-item-log" data-cat="' + cat.id + '" data-item="' + it.id + '" data-id="' + lg.id + '" title="Remove" aria-label="Remove">' + X_SVG + '</button>';
                 html += '</div>';
+                if(isSplit) html += '<div class="log-note">' + chunkNote(board, lg.amount, lg.mode || it.mode || "me") + '</div>';
+                html += '</div>';
               });
+            }
+            if(isSplit && lumpRemainder(it) > 0.004){
+              var lump = lumpRemainder(it);
+              html += '<div class="log-entry"><div class="log-row-small"><span class="label">Marked as paid</span><span class="leader"></span><span class="amount num">' + fmt(lump) + '</span></div>';
+              html += '<div class="log-note">' + chunkNote(board, lump, it.mode || "me") + '</div></div>';
             }
             if(logFormOpen){
               html += '    <div class="quick-add-row small">';
@@ -830,8 +862,8 @@
               html += '      <input type="number" step="0.01" inputmode="decimal" class="qa2-amount" data-item="' + it.id + '" placeholder="0.00">';
               html += '      <button class="icon-btn" data-action="quick-add-item-log" data-cat="' + cat.id + '" data-item="' + it.id + '" title="Log spend" aria-label="Log spend">' + PLUS_SVG + '</button>';
               html += '    </div>';
-              if(board.split.enabled && it.shared){
-                html += '    <div class="payer-line"><span class="payer-label">Paid by</span><select class="qa2-payer" data-item="' + it.id + '">' + payerOptionsHtml(board, it.payer || "none", "none") + '</select></div>';
+              if(isSplit){
+                html += '    <div class="payer-line"><span class="payer-label">Split</span><select class="qa2-mode" data-item="' + it.id + '">' + modeOptionsHtml(board, it.mode || "me") + '</select></div>';
               }
               html += '    <button class="log-cancel-btn" data-action="cancel-log-form" data-item="' + it.id + '">Cancel</button>';
             } else {
@@ -927,9 +959,9 @@
       var item3 = cat3 && cat3.planned.find(function(i){ return i.id === itId3; });
       if(item3){
         item3.logs = item3.logs || [];
-        var payerEl = $overview.querySelector('.qa2-payer[data-item="' + itId3 + '"]');
-        var logPayer = payerEl ? payerEl.value : "";
-        item3.logs.push({ id: uid(), name: name, amount: amount, payer: logPayer });
+        var modeEl = $overview.querySelector('.qa2-mode[data-item="' + itId3 + '"]');
+        var logMode = modeEl ? modeEl.value : "";
+        item3.logs.push({ id: uid(), name: name, amount: amount, mode: logMode });
         openLogItemIds[itId3] = false;
         persist(true);
         toast("Logged " + fmt(amount) + " ✓");
@@ -948,28 +980,26 @@
     html += '<div class="section-label">Split costs</div>';
     html += '<div class="edit-card">';
     if(!board.split.enabled){
-      html += '  <p class="hint" style="margin:0 0 12px;">Sharing this budget with someone? Set a ratio, pick which sub-expenses it applies to, say who paid, and Ledger works out who owes who.</p>';
+      html += '  <p class="hint" style="margin:0 0 12px;">Sharing bills with someone? Set a ratio, choose which sub-expenses it applies to, and Ledger shows <strong>your share</strong> of each one and what&rsquo;s owed. Enter the full bill; it does the maths.</p>';
       html += '  <button class="btn secondary block" id="split-enable">Turn on splitting</button>';
     } else {
       var spE = board.split;
       var prevE = computeSplit(board);
+      var nBE = escapeHtml(spE.nameB);
       html += '  <div class="edit-card-head" style="margin-bottom:10px;">';
-      html += '    <div class="cat-name">Two people, one ratio</div>';
+      html += '    <div class="cat-name">You &amp; ' + nBE + '</div>';
       html += '    <button class="btn danger small" id="split-disable">Turn off</button>';
       html += '  </div>';
-      html += '  <div class="row-inline" style="margin-bottom:12px;">';
-      html += '    <div><label class="flabel">First person</label><input type="text" id="split-name-a" maxlength="20" value="' + escapeHtml(spE.nameA) + '"></div>';
-      html += '    <div><label class="flabel">Second person</label><input type="text" id="split-name-b" maxlength="20" value="' + escapeHtml(spE.nameB) + '"></div>';
-      html += '  </div>';
+      html += '  <div class="field-group"><label class="flabel">Other person&rsquo;s name</label><input type="text" id="split-name-b" maxlength="20" value="' + nBE + '"></div>';
       html += '  <label class="flabel">Ratio</label>';
       html += '  <div class="ratio-row">';
-      html += '    <div class="ratio-col"><label class="flabel" style="margin-bottom:5px;">' + escapeHtml(spE.nameA) + '</label><input type="number" step="any" min="0" inputmode="decimal" id="split-ratio-a" value="' + spE.ratioA + '"></div>';
+      html += '    <div class="ratio-col"><label class="flabel" style="margin-bottom:5px;">You</label><input type="number" step="any" min="0" inputmode="decimal" id="split-ratio-a" value="' + spE.ratioA + '"></div>';
       html += '    <div class="ratio-sep">:</div>';
-      html += '    <div class="ratio-col"><label class="flabel" style="margin-bottom:5px;">' + escapeHtml(spE.nameB) + '</label><input type="number" step="any" min="0" inputmode="decimal" id="split-ratio-b" value="' + spE.ratioB + '"></div>';
+      html += '    <div class="ratio-col"><label class="flabel" style="margin-bottom:5px;">' + nBE + '</label><input type="number" step="any" min="0" inputmode="decimal" id="split-ratio-b" value="' + spE.ratioB + '"></div>';
       html += '  </div>';
-      html += '  <p class="hint">' + escapeHtml(spE.nameA) + ' covers ' + fmtPct(prevE.pctA) + ' and ' + escapeHtml(spE.nameB) + ' covers ' + fmtPct(prevE.pctB) + ' of the shared spend. Tick <em>Split by ratio</em> on the sub-expenses you share, and say who paid.</p>';
+      html += '  <p class="hint">You cover ' + fmtPct(prevE.pctMe) + ' and ' + nBE + ' covers ' + fmtPct(prevE.pctOther) + '. Enter each bill in full. Tick <em>Split by ratio</em> on the sub-expenses you share and say whether the bill is already split or not yet.</p>';
       html += '  <button class="btn block" style="margin-top:12px;" id="split-save">Save split</button>';
-      html += '  <p class="hint" style="margin-top:10px;">Right now: ' + (prevE.square ? 'all square.' : '<strong>' + escapeHtml(personName(board, prevE.from)) + '</strong> pays <strong>' + escapeHtml(personName(board, prevE.to)) + '</strong> <span class="num">' + fmt(prevE.amount) + '</span>.') + '</p>';
+      html += '  <p class="hint" style="margin-top:10px;">Right now: ' + (prevE.square ? 'all settled.' : (prevE.net > 0 ? '<strong>' + nBE + '</strong> owes you <span class="num">' + fmt(prevE.net) + '</span>.' : 'you owe <strong>' + nBE + '</strong> <span class="num">' + fmt(-prevE.net) + '</span>.')) + '</p>';
     }
     html += '</div>';
 
@@ -1025,7 +1055,7 @@
       if(cat.budgetOverride){
         html += '  <button class="btn secondary small" style="margin-top:8px;" data-action="reset-budget" data-id="' + cat.id + '">Reset to auto (' + fmt(auto) + ')</button>';
       } else {
-        html += '  <p class="hint">Auto-set to the sum of sub-expenses below.</p>';
+        html += '  <p class="hint">Auto-set to the sum of sub-expenses below' + (board.split.enabled ? ' (your share of any split ones)' : '') + '.</p>';
       }
 
       html += '  <div class="items-list">';
@@ -1044,7 +1074,7 @@
           html += '<div class="payer-line in-list">';
           html += '  <label class="share-toggle"><input type="checkbox" class="item-shared-input" data-id="' + it.id + '"' + (it.shared ? ' checked' : '') + '> Split by ratio</label>';
           if(it.shared){
-            html += '  <span class="payer-label">Paid by</span><select class="item-payer-input" data-id="' + it.id + '">' + payerOptionsHtml(board, it.payer || "", "") + '</select>';
+            html += '  <select class="item-mode-input" data-id="' + it.id + '">' + modeOptionsHtml(board, it.mode || "me") + '</select>';
           }
           html += '</div>';
         }
@@ -1059,7 +1089,7 @@
       if(board.split.enabled){
         html += '  <div class="payer-line">';
         html += '    <label class="share-toggle"><input type="checkbox" class="new-item-shared" data-cat="' + cat.id + '" checked> Split by ratio</label>';
-        html += '    <span class="payer-label">Paid by</span><select class="new-item-payer" data-cat="' + cat.id + '">' + payerOptionsHtml(board, "", "") + '</select>';
+        html += '    <select class="new-item-mode" data-cat="' + cat.id + '">' + modeOptionsHtml(board, "me") + '</select>';
         html += '  </div>';
       }
 
@@ -1071,7 +1101,14 @@
     var splitEnableBtn = document.getElementById("split-enable");
     if(splitEnableBtn){
       splitEnableBtn.addEventListener("click", function(){
-        cb().split.enabled = true;
+        var bd = cb();
+        if(!bd.split.everEnabled){
+          // first time: nothing is shared until you tick it, so existing budgets don't change by surprise
+          bd.categories.forEach(function(c){ (c.planned || []).forEach(function(i){ i.shared = false; }); });
+          bd.split.everEnabled = true;
+        }
+        bd.split.enabled = true;
+        recalcAllBudgets(bd);
         persist(true);
         toast("Splitting turned on ✓");
         renderEdit();
@@ -1083,6 +1120,7 @@
     if(splitDisableBtn){
       splitDisableBtn.addEventListener("click", function(){
         cb().split.enabled = false;
+        recalcAllBudgets(cb());
         persist(true);
         toast("Splitting turned off (your settings are kept)");
         renderEdit();
@@ -1093,9 +1131,7 @@
     var splitSaveBtn = document.getElementById("split-save");
     if(splitSaveBtn){
       splitSaveBtn.addEventListener("click", function(){
-        var nameA = document.getElementById("split-name-a").value.trim() || "A";
-        var nameB = document.getElementById("split-name-b").value.trim() || "B";
-        if(nameA.toLowerCase() === nameB.toLowerCase()){ toast("Give each person a different name"); return; }
+        var nameB = document.getElementById("split-name-b").value.trim() || "Partner";
         var rA = parseFloat(document.getElementById("split-ratio-a").value);
         var rB = parseFloat(document.getElementById("split-ratio-b").value);
         if(isNaN(rA) || isNaN(rB) || rA < 0 || rB < 0 || (rA + rB) <= 0){
@@ -1103,7 +1139,8 @@
           return;
         }
         var sp = cb().split;
-        sp.nameA = nameA; sp.nameB = nameB; sp.ratioA = rA; sp.ratioB = rB;
+        sp.nameB = nameB; sp.ratioA = rA; sp.ratioB = rB;
+        recalcAllBudgets(cb());
         persist(true);
         toast("Split saved ✓");
         renderEdit();
@@ -1240,9 +1277,9 @@
       var cat = cb().categories.find(function(c){ return c.id === cId; });
       if(cat){
         cat.planned = cat.planned || [];
-        var newPayerEl = $edit.querySelector('.new-item-payer[data-cat="' + cId + '"]');
+        var newModeEl = $edit.querySelector('.new-item-mode[data-cat="' + cId + '"]');
         var newSharedEl = $edit.querySelector('.new-item-shared[data-cat="' + cId + '"]');
-        cat.planned.push({ id: uid(), name: name, amount: amount, paid: false, payer: newPayerEl ? newPayerEl.value : "", shared: newSharedEl ? newSharedEl.checked : true, logs: [] });
+        cat.planned.push({ id: uid(), name: name, amount: amount, paid: false, mode: newModeEl ? newModeEl.value : "me", shared: newSharedEl ? newSharedEl.checked : false, logs: [] });
         recalcAutoBudget(cat);
         persist(true);
         toast("Sub-expense added ✓");
@@ -1259,8 +1296,8 @@
       var cat2 = cb().categories.find(function(c){ return c.id === cId2; });
       var item = cat2 && cat2.planned.find(function(i){ return i.id === iId; });
       if(item){
-        var itemPayerEl = $edit.querySelector('.item-payer-input[data-id="' + iId + '"]');
-        if(itemPayerEl) item.payer = itemPayerEl.value;
+        var itemModeEl = $edit.querySelector('.item-mode-input[data-id="' + iId + '"]');
+        if(itemModeEl) item.mode = itemModeEl.value;
         var itemSharedEl = $edit.querySelector('.item-shared-input[data-id="' + iId + '"]');
         if(itemSharedEl) item.shared = itemSharedEl.checked;
         item.name = nameEl.value.trim() || item.name;
@@ -1290,7 +1327,7 @@
 
   // Changing "Paid by" on an existing sub-expense saves that row straight away
   $edit.addEventListener("change", function(e){
-    var sel = e.target.closest(".item-payer-input, .item-shared-input");
+    var sel = e.target.closest(".item-mode-input, .item-shared-input");
     if(!sel) return;
     var saveBtn = $edit.querySelector('[data-action="save-item"][data-id="' + sel.getAttribute("data-id") + '"]');
     if(saveBtn) saveBtn.click();
