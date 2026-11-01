@@ -311,6 +311,8 @@
   .settle-row .who .pct{ font-weight:400; color:var(--ink-soft); font-size:11.5px; margin-left:5px; }
   .settle-row .figs{ font-size:12px; color:var(--ink-soft); text-align:right; flex-shrink:0; }
   .settle-row .figs .num{ color:var(--ink); }
+  .settle-row.total{ border-top:1px dashed var(--line); margin-top:4px; padding-top:9px; }
+  .settle-row.total .who, .settle-row.total .figs .num{ font-size:15px; font-weight:700; color:var(--teal-deep); }
 
   /* ---------- Bottom tab bar ---------- */
   .tabbar{
@@ -394,6 +396,7 @@
   var appState = { activeBoardId: null, boards: [] };
   var openCategoryIds = {};
   var openLogItemIds = {};
+  var repayFormOpen = false;
   var currentTab = "overview";
   var boardMenuOpen = false;
 
@@ -446,7 +449,7 @@
   }
   function defaultSplit(){
     // You are always the first person (A). nameB is the other person.
-    return { enabled: false, everEnabled: false, nameA: "Me", nameB: "Partner", ratioA: 1, ratioB: 1 };
+    return { enabled: false, everEnabled: false, nameA: "Me", nameB: "Partner", ratioA: 1, ratioB: 1, payments: [] };
   }
   function createBoard(name){
     return { id: uid(), name: name, income: 0, categories: [], split: defaultSplit() };
@@ -494,7 +497,15 @@
       nameA: (sp.nameA && String(sp.nameA).trim()) || d.nameA,
       nameB: (sp.nameB && String(sp.nameB).trim()) || d.nameB,
       ratioA: (isFinite(rA) && rA >= 0) ? rA : d.ratioA,
-      ratioB: (isFinite(rB) && rB >= 0) ? rB : d.ratioB
+      ratioB: (isFinite(rB) && rB >= 0) ? rB : d.ratioB,
+      // repayments between you and them: dir "in" = they paid you back, "out" = you paid them back
+      payments: (Array.isArray(sp.payments) ? sp.payments : []).map(function(p){
+        var a = parseFloat(p && p.amount);
+        return { id: (p && p.id) || uid(), dir: (p && p.dir === "out") ? "out" : "in",
+                 amount: (isFinite(a) && a > 0) ? a : 0,
+                 note: (p && p.note) ? String(p.note).slice(0, 60) : "",
+                 date: (p && typeof p.date === "string") ? p.date : "" };
+      }).filter(function(p){ return p.amount > 0; })
     };
   }
   function normalizeBoard(b){
@@ -554,7 +565,11 @@
     return r2((cat.planned || []).reduce(function(s,it){ return s + itemSpent(it); }, 0));
   }
   function totalBudget(){ return cb().categories.reduce(function(s,c){ return s + (Number(c.budget)||0); }, 0); }
-  function totalSpent(){ return r2(cb().categories.reduce(function(s,c){ return s + catSpent(c); }, 0)); }
+  function totalSpent(){
+    return r2(cb().categories.reduce(function(s,c){
+      return s + (c.planned || []).reduce(function(t,it){ return t + itemSpent(it); }, 0);
+    }, 0));
+  }
   function recalcAllBudgets(board){
     board.categories.forEach(function(c){ if(!c.budgetOverride) c.budget = autoBudgetFor(c, board); });
   }
@@ -562,25 +577,34 @@
   /* ---------- Settling up ---------- */
   function computeSplit(board){
     var f = myFracOf(board);
-    var shared = 0, done = 0, owedToMe = 0, iOwe = 0;
+    var shared = 0, done = 0, owedToMe = 0, iOwe = 0, ownSpend = 0, outOfPocket = 0;
     board.categories.forEach(function(c){
       (c.planned || []).forEach(function(it){
-        if(!it.shared) return;
+        if(!it.shared){
+          var own = itemFullSpent(it);       // not split: entirely mine, and I paid it
+          ownSpend += own; outOfPocket += own;
+          return;
+        }
         itemChunks(it).forEach(function(ch){
           shared += ch.amount;
-          if(ch.mode === "done") done += ch.amount;
-          else if(ch.mode === "other") iOwe += ch.amount * f;          // they paid it all: I owe my share
-          else owedToMe += ch.amount * (1 - f);                          // I paid it all: they owe their share
+          if(ch.mode === "done"){ done += ch.amount; outOfPocket += ch.amount * f; }   // I already paid just my share
+          else if(ch.mode === "other") iOwe += ch.amount * f;                           // they paid it all: I owe my share
+          else { owedToMe += ch.amount * (1 - f); outOfPocket += ch.amount; }           // I paid it all: they owe the rest
         });
       });
     });
     var net = owedToMe - iOwe;
+    var recv = 0, paidOut = 0;
+    (board.split.payments || []).forEach(function(p){ if(p.dir === "in") recv += p.amount; else paidOut += p.amount; });
+    var remaining = net - recv + paidOut;          // > 0: they still owe you | < 0: you still owe them
     return {
+      recv: recv, paidOut: paidOut, remaining: remaining, cash: outOfPocket - recv + paidOut,
+      ownSpend: ownSpend, outOfPocket: outOfPocket, actual: ownSpend + shared * f,
       shared: shared, done: done,
       myShare: shared * f, otherShare: shared * (1 - f),
       pctMe: f * 100, pctOther: (1 - f) * 100,
       owedToMe: owedToMe, iOwe: iOwe, net: net,
-      square: Math.abs(net) < 0.005
+      square: Math.abs(remaining) < 0.005
     };
   }
   function modeOptionsHtml(board, selected){
@@ -709,6 +733,7 @@
     var id = item.getAttribute("data-id");
     if(id !== appState.activeBoardId){
       appState.activeBoardId = id;
+      repayFormOpen = false;
       openCategoryIds = {};
       persist(true);
       toast("Switched to " + cb().name);
@@ -755,30 +780,71 @@
     html += '  <div class="hero-title">This month</div>';
     html += '  <div class="hero-remaining-label">Remaining</div>';
     html += '  <div class="hero-remaining-value ' + (remaining<0?"warn":"good") + '">' + fmt(remaining) + '</div>';
-    html += '  <div class="hero-caption"><span class="num">' + fmt(spent) + '</span> spent of <span class="num">' + fmt(income) + '</span> income</div>';
+    html += '  <div class="hero-caption"><span class="num">' + fmt(spent) + '</span> ' + (board.split.enabled ? 'actually spent (your share)' : 'spent') + ' of <span class="num">' + fmt(income) + '</span> income</div>';
     html += '  <div class="bar-track"><div class="bar-fill ' + (over?"over":"") + '" style="width:' + pct + '%"></div></div>';
     html += '</div>';
 
     if(board.split.enabled){
       var sp = computeSplit(board);
       var nB = escapeHtml(board.split.nameB);
+      var payments = board.split.payments || [];
       html += '<div class="settle-card">';
       html += '  <div class="hero-title" style="margin-bottom:0;">Split · ' + ratioText(board) + '</div>';
       if(sp.square){
         html += '  <div class="settle-square">All settled</div>';
-        html += '  <div class="hero-caption">' + (sp.shared > 0 ? 'Nothing owed either way.' : 'Tick “Split by ratio” on a sub-expense in Edit and it shows up here.') + '</div>';
-      } else if(sp.net > 0){
-        html += '  <div class="settle-headline"><strong>' + nB + '</strong> owes you</div>';
-        html += '  <div class="settle-amount num">' + fmt(sp.net) + '</div>';
+        html += '  <div class="hero-caption">' + (sp.shared > 0 || payments.length ? 'Nothing owed either way.' : 'Tick “Split by ratio” on a sub-expense in Edit and it shows up here.') + '</div>';
+      } else if(sp.remaining > 0){
+        html += '  <div class="settle-headline"><strong>' + nB + '</strong> still owes you</div>';
+        html += '  <div class="settle-amount num">' + fmt(sp.remaining) + '</div>';
       } else {
-        html += '  <div class="settle-headline">You owe <strong>' + nB + '</strong></div>';
-        html += '  <div class="settle-amount num">' + fmt(-sp.net) + '</div>';
+        html += '  <div class="settle-headline">You still owe <strong>' + nB + '</strong></div>';
+        html += '  <div class="settle-amount num">' + fmt(-sp.remaining) + '</div>';
       }
       html += '  <div class="settle-rows">';
       html += '    <div class="settle-row"><span class="who">Shared bills</span><span class="figs"><span class="num">' + fmt(sp.shared) + '</span></span></div>';
       html += '    <div class="settle-row"><span class="who">Your share<span class="pct">' + fmtPct(sp.pctMe) + '</span></span><span class="figs"><span class="num">' + fmt(sp.myShare) + '</span></span></div>';
       html += '    <div class="settle-row"><span class="who">' + nB + '’s share<span class="pct">' + fmtPct(sp.pctOther) + '</span></span><span class="figs"><span class="num">' + fmt(sp.otherShare) + '</span></span></div>';
       html += '  </div>';
+
+      html += '  <div class="subsection-label" style="margin-top:12px;">Your money, once settled</div>';
+      html += '  <div class="settle-rows" style="margin-top:2px;border-top:none;padding-top:0;">';
+      html += '    <div class="settle-row"><span class="who">Paid out of your pocket</span><span class="figs"><span class="num">' + fmt(sp.outOfPocket) + '</span></span></div>';
+      if(sp.recv > 0.004) html += '    <div class="settle-row"><span class="who">' + nB + ' paid you back</span><span class="figs"><span class="num">−' + fmt(sp.recv) + '</span></span></div>';
+      if(sp.paidOut > 0.004) html += '    <div class="settle-row"><span class="who">You paid ' + nB + ' back</span><span class="figs"><span class="num">+' + fmt(sp.paidOut) + '</span></span></div>';
+      if(sp.recv > 0.004 || sp.paidOut > 0.004) html += '    <div class="settle-row"><span class="who">Out of pocket now</span><span class="figs"><span class="num">' + fmt(sp.cash) + '</span></span></div>';
+      if(!sp.square){
+        html += '    <div class="settle-row"><span class="who">' + (sp.remaining > 0 ? nB + ' still owes you' : 'You still owe ' + nB) + '</span><span class="figs"><span class="num">' + (sp.remaining > 0 ? '−' : '+') + fmt(Math.abs(sp.remaining)) + '</span></span></div>';
+      }
+      html += '    <div class="settle-row total"><span class="who">Your actual spend</span><span class="figs"><span class="num">' + fmt(sp.actual) + '</span></span></div>';
+      html += '  </div>';
+
+      html += '  <div class="subsection-label" style="margin-top:12px;">Repayments</div>';
+      if(payments.length){
+        payments.forEach(function(pm){
+          var when = '';
+          if(pm.date){ var dd = new Date(pm.date + 'T12:00:00'); if(!isNaN(dd)) when = dd.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' · '; }
+          html += '<div class="log-row-small">';
+          html += '  <span class="label">' + when + (pm.dir === 'in' ? nB + ' paid you' : 'You paid ' + nB) + (pm.note ? ' · ' + escapeHtml(pm.note) : '') + '</span><span class="leader"></span>';
+          html += '  <span class="amount num">' + fmt(pm.amount) + '</span>';
+          html += '  <button class="icon-btn ghost tiny" data-action="delete-repayment" data-id="' + pm.id + '" title="Remove" aria-label="Remove">' + X_SVG + '</button>';
+          html += '</div>';
+        });
+      } else {
+        html += '  <div class="empty-items" style="padding-top:2px;">None yet.</div>';
+      }
+      if(repayFormOpen){
+        var defDir = sp.remaining < -0.004 ? 'out' : 'in';
+        var defAmt = sp.square ? '' : String(r2(Math.abs(sp.remaining)));
+        html += '  <div class="payer-line"><span class="payer-label">Who paid</span><select id="repay-dir"><option value="in"' + (defDir === 'in' ? ' selected' : '') + '>' + nB + ' paid me back</option><option value="out"' + (defDir === 'out' ? ' selected' : '') + '>I paid ' + nB + ' back</option></select></div>';
+        html += '  <div class="quick-add-row small">';
+        html += '    <input type="text" id="repay-note" maxlength="60" placeholder="Note (optional)">';
+        html += '    <input type="number" step="0.01" inputmode="decimal" id="repay-amount" value="' + defAmt + '" placeholder="0.00">';
+        html += '    <button class="icon-btn" data-action="add-repayment" title="Record repayment" aria-label="Record repayment">' + PLUS_SVG + '</button>';
+        html += '  </div>';
+        html += '  <button class="log-cancel-btn" data-action="cancel-repay-form">Cancel</button>';
+      } else {
+        html += '  <button class="log-expense-btn" data-action="toggle-repay-form">' + PLUS_SVG + ' Record repayment</button>';
+      }
       if(sp.done > 0.004){
         html += '  <p class="hint">' + fmt(sp.done) + ' of the shared bills was already split when paid, so none of that is owed.</p>';
       }
@@ -927,6 +993,43 @@
       return;
     }
 
+    var toggleRepay = e.target.closest('[data-action="toggle-repay-form"]');
+    if(toggleRepay){
+      repayFormOpen = true;
+      renderOverview();
+      var repayAmt = document.getElementById("repay-amount");
+      if(repayAmt){ repayAmt.focus(); repayAmt.select(); }
+      return;
+    }
+    var cancelRepay = e.target.closest('[data-action="cancel-repay-form"]');
+    if(cancelRepay){ repayFormOpen = false; renderOverview(); return; }
+    var addRepay = e.target.closest('[data-action="add-repayment"]');
+    if(addRepay){
+      var rAmtEl = document.getElementById("repay-amount");
+      var rAmt = clampNum(rAmtEl.value);
+      if(rAmt <= 0){ toast("Enter the amount repaid"); rAmtEl.focus(); return; }
+      var today = new Date();
+      var stamp = today.getFullYear() + "-" + ("0" + (today.getMonth() + 1)).slice(-2) + "-" + ("0" + today.getDate()).slice(-2);
+      cb().split.payments.push({
+        id: uid(), dir: document.getElementById("repay-dir").value === "out" ? "out" : "in",
+        amount: r2(rAmt), note: document.getElementById("repay-note").value.trim(), date: stamp
+      });
+      repayFormOpen = false;
+      persist(true);
+      toast("Repayment recorded ✓");
+      renderOverview();
+      return;
+    }
+    var delRepay = e.target.closest('[data-action="delete-repayment"]');
+    if(delRepay){
+      var rid = delRepay.getAttribute("data-id");
+      cb().split.payments = cb().split.payments.filter(function(pm){ return pm.id !== rid; });
+      persist(true);
+      toast("Removed");
+      renderOverview();
+      return;
+    }
+
     var toggleLogForm = e.target.closest('[data-action="toggle-log-form"]');
     if(toggleLogForm){
       var openItId = toggleLogForm.getAttribute("data-item");
@@ -999,7 +1102,7 @@
       html += '  </div>';
       html += '  <p class="hint">You cover ' + fmtPct(prevE.pctMe) + ' and ' + nBE + ' covers ' + fmtPct(prevE.pctOther) + '. Enter each bill in full. Tick <em>Split by ratio</em> on the sub-expenses you share and say whether the bill is already split or not yet.</p>';
       html += '  <button class="btn block" style="margin-top:12px;" id="split-save">Save split</button>';
-      html += '  <p class="hint" style="margin-top:10px;">Right now: ' + (prevE.square ? 'all settled.' : (prevE.net > 0 ? '<strong>' + nBE + '</strong> owes you <span class="num">' + fmt(prevE.net) + '</span>.' : 'you owe <strong>' + nBE + '</strong> <span class="num">' + fmt(-prevE.net) + '</span>.')) + '</p>';
+      html += '  <p class="hint" style="margin-top:10px;">Right now: ' + (prevE.square ? 'all settled.' : (prevE.remaining > 0 ? '<strong>' + nBE + '</strong> still owes you <span class="num">' + fmt(prevE.remaining) + '</span>.' : 'you still owe <strong>' + nBE + '</strong> <span class="num">' + fmt(-prevE.remaining) + '</span>.')) + '</p>';
     }
     html += '</div>';
 
